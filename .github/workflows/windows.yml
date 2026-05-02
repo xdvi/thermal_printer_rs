@@ -1,0 +1,65 @@
+name: Windows CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Show tool versions
+        run: |
+          flutter --version
+          cmake --version
+
+      - name: Install Dart dependencies
+        run: flutter pub get
+
+      - name: Install example dependencies
+        working-directory: example
+        run: flutter pub get
+
+      - name: Analyze Dart sources
+        run: flutter analyze lib test
+
+      - name: Run Dart tests
+        run: flutter test
+
+      - name: Run Rust tests
+        working-directory: rust
+        run: cargo test
+
+      - name: Check Rust lints (Clippy)
+        working-directory: rust
+        run: cargo clippy -- -D warnings
+      - name: Bootstrap Windows example runner
+        working-directory: example
+        run: flutter create --platforms=windows .
+
+      - name: Build Windows example
+        working-directory: example
+        run: flutter build windows --debug

@@ -1,0 +1,73 @@
+name: Linux CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: linux-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            libbluetooth-dev \
+            libcups2-dev \
+            libgnutls28-dev \
+            libgtk-3-dev \
+            ninja-build \
+            pkg-config
+
+      - name: Show tool versions
+        run: |
+          flutter --version
+          cmake --version
+
+      - name: Install Dart dependencies
+        run: flutter pub get
+
+      - name: Install example dependencies
+        working-directory: example
+        run: flutter pub get
+
+      - name: Analyze Dart sources
+        run: flutter analyze lib test
+
+      - name: Run Dart tests
+        run: flutter test
+
+      - name: Run Rust tests
+        working-directory: rust
+        run: cargo test
+
+      - name: Check Rust lints (Clippy)
+        working-directory: rust
+        run: cargo clippy -- -D warnings
+      - name: Build Linux example
+        working-directory: example
+        run: flutter build linux --debug

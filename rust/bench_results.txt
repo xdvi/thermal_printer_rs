@@ -1,0 +1,204 @@
+    Updating crates.io index
+     Locking 21 packages to latest compatible versions
+      Adding anes v0.1.6
+      Adding anstyle v1.0.14
+      Adding cast v0.3.0
+      Adding ciborium v0.2.2
+      Adding ciborium-io v0.2.2
+      Adding ciborium-ll v0.2.2
+      Adding clap v4.6.1
+      Adding clap_builder v4.6.0
+      Adding clap_lex v1.1.0
+      Adding criterion v0.5.1 (available: v0.8.2)
+      Adding criterion-plot v0.5.0
+      Adding hermit-abi v0.5.2
+      Adding is-terminal v0.4.17
+      Adding itoa v1.0.18
+      Adding oorandom v11.1.5
+      Adding plotters v0.3.7
+      Adding plotters-backend v0.3.7
+      Adding plotters-svg v0.3.7
+      Adding serde_json v1.0.149
+      Adding tinytemplate v1.2.1
+      Adding zmij v1.0.21
+ Downloading crates ...
+  Downloaded cast v0.3.0
+  Downloaded anes v0.1.6
+  Downloaded ciborium-ll v0.2.2
+  Downloaded plotters-svg v0.3.7
+  Downloaded ciborium-io v0.2.2
+  Downloaded plotters-backend v0.3.7
+  Downloaded crossbeam-deque v0.8.6
+  Downloaded criterion-plot v0.5.0
+  Downloaded ciborium v0.2.2
+  Downloaded tinytemplate v1.2.1
+  Downloaded crossbeam-epoch v0.9.18
+  Downloaded oorandom v11.1.5
+  Downloaded half v2.7.1
+  Downloaded zerocopy-derive v0.8.48
+  Downloaded rayon-core v1.13.0
+  Downloaded criterion v0.5.1
+  Downloaded plotters v0.3.7
+  Downloaded rayon v1.12.0
+  Downloaded zerocopy v0.8.48
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.12
+   Compiling quote v1.0.45
+   Compiling libc v0.2.186
+   Compiling cfg-if v1.0.0
+   Compiling autocfg v1.1.0
+   Compiling memchr v2.6.4
+   Compiling version_check v0.9.4
+   Compiling typenum v1.17.0
+   Compiling futures-core v0.3.29
+   Compiling pin-project-lite v0.2.13
+   Compiling slab v0.4.9
+   Compiling futures-task v0.3.29
+   Compiling generic-array v0.14.7
+   Compiling futures-channel v0.3.29
+   Compiling crossbeam-utils v0.8.21
+   Compiling futures-util v0.3.29
+   Compiling futures-sink v0.3.29
+   Compiling serde_core v1.0.228
+   Compiling zerocopy v0.8.48
+   Compiling syn v2.0.117
+   Compiling once_cell v1.18.0
+   Compiling regex-syntax v0.8.2
+   Compiling futures-io v0.3.29
+   Compiling cc v1.0.83
+   Compiling pin-utils v0.1.0
+   Compiling log v0.4.29
+   Compiling zmij v1.0.21
+   Compiling adler v1.0.2
+   Compiling gimli v0.28.1
+   Compiling crypto-common v0.1.6
+   Compiling block-buffer v0.10.4
+   Compiling serde v1.0.228
+   Compiling anyhow v1.0.75
+   Compiling digest v0.10.7
+   Compiling crossbeam-epoch v0.9.18
+   Compiling miniz_oxide v0.7.1
+   Compiling mio v1.2.0
+   Compiling backtrace v0.3.69
+   Compiling regex-automata v0.4.3
+   Compiling dart-sys v4.1.5
+   Compiling socket2 v0.6.3
+   Compiling tracing-core v0.1.36
+   Compiling object v0.32.1
+   Compiling num-traits v0.2.19
+   Compiling serde_json v1.0.149
+   Compiling rustc-demangle v0.1.23
+   Compiling lazy_static v1.4.0
+   Compiling rayon-core v1.13.0
+   Compiling addr2line v0.21.0
+   Compiling parking_lot_core v0.9.12
+   Compiling either v1.15.0
+   Compiling bytes v1.11.1
+   Compiling portable-atomic v1.13.1
+   Compiling build-target v0.4.0
+   Compiling smallvec v1.15.1
+   Compiling flutter_rust_bridge v2.12.0
+   Compiling md-5 v0.10.6
+   Compiling crossbeam-deque v0.8.6
+   Compiling num_cpus v1.16.0
+   Compiling plotters-backend v0.3.7
+   Compiling hex v0.4.3
+   Compiling atomic v0.5.3
+   Compiling itoa v1.0.18
+   Compiling clap_lex v1.1.0
+   Compiling ciborium-io v0.2.2
+   Compiling anstyle v1.0.14
+   Compiling thiserror v1.0.69
+   Compiling scopeguard v1.2.0
+   Compiling futures-macro v0.3.29
+   Compiling zerocopy-derive v0.8.48
+   Compiling serde_derive v1.0.228
+   Compiling tokio-macros v2.7.0
+   Compiling tracing-attributes v0.1.31
+   Compiling tokio v1.52.1
+   Compiling tracing v0.1.44
+   Compiling allo-isolate v0.1.27
+   Compiling thiserror-impl v1.0.69
+   Compiling flutter_rust_bridge_macros v2.12.0
+   Compiling delegate-attr v0.3.0
+   Compiling lock_api v0.4.14
+   Compiling futures-executor v0.3.29
+   Compiling clap_builder v4.6.0
+   Compiling futures v0.3.29
+   Compiling plotters-svg v0.3.7
+   Compiling threadpool v1.8.1
+   Compiling matchers v0.2.0
+   Compiling half v2.7.1
+   Compiling ciborium-ll v0.2.2
+   Compiling itertools v0.10.5
+   Compiling sharded-slab v0.1.7
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling encoding_rs v0.8.35
+   Compiling byteorder v1.5.0
+   Compiling same-file v1.0.6
+   Compiling cast v0.3.0
+   Compiling nu-ansi-term v0.50.3
+   Compiling walkdir v2.5.0
+   Compiling tracing-subscriber v0.3.23
+   Compiling escpos v0.17.0
+   Compiling criterion-plot v0.5.0
+   Compiling parking_lot v0.12.5
+   Compiling ciborium v0.2.2
+   Compiling plotters v0.3.7
+   Compiling clap v4.6.1
+   Compiling rayon v1.12.0
+   Compiling tinytemplate v1.2.1
+   Compiling async-trait v0.1.89
+   Compiling regex v1.10.2
+   Compiling is-terminal v0.4.17
+   Compiling anes v0.1.6
+   Compiling oorandom v11.1.5
+   Compiling criterion v0.5.1
+   Compiling thermal_printer_rs v0.1.0 (/mnt/DATA/projects/thermal_printer_rs/rust)
+warning: variants `Connect` and `Disconnect` are never constructed
+  --> src/jobs.rs:19:5
+   |
+15 | pub enum PrintCommand {
+   |          ------------ variants in this enum
+...
+19 |     Connect,
+   |     ^^^^^^^
+20 |     /// Explicitly disconnect the transport.
+21 |     Disconnect,
+   |     ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `thermal_printer_rs` (lib) generated 1 warning
+warning: unused import: `TransportKind`
+ --> benches/performance_bench.rs:3:49
+  |
+3 | use thermal_printer_rs::config::{PrinterConfig, TransportKind};
+  |                                                 ^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `thermal_printer_rs` (bench "performance_bench") generated 1 warning (run `cargo fix --bench "performance_bench" -p thermal_printer_rs` to apply 1 suggestion)
+    Finished `bench` profile [optimized] target(s) in 1m 35s
+     Running benches/performance_bench.rs (target/release/deps/performance_bench-64e38d6a509f8570)
+Gnuplot not found, using plotters backend
+Benchmarking adapter_build_text_2k
+Benchmarking adapter_build_text_2k: Analyzing
+adapter_build_text_2k   time:   [5.2929 µs 5.3303 µs 5.4801 µs]
+
+Benchmarking adapter_build_receipt_8k
+Benchmarking adapter_build_receipt_8k: Analyzing
+adapter_build_receipt_8k
+                        time:   [132.90 µs 133.85 µs 134.09 µs]
+
+Benchmarking service_send_buffer_128k
+Benchmarking service_send_buffer_128k: Analyzing
+service_send_buffer_128k
+                        time:   [80.962 µs 81.140 µs 81.854 µs]
+
+Benchmarking service_print_text_2k_pipeline
+Benchmarking service_print_text_2k_pipeline: Analyzing
+service_print_text_2k_pipeline
+                        time:   [7.2977 µs 7.3684 µs 7.6513 µs]
+
