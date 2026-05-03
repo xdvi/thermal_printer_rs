@@ -13,9 +13,11 @@ import 'android_environment.dart';
 import 'build_cmake.dart';
 import 'build_gradle.dart';
 import 'build_pod.dart';
+import 'crate_hash.dart';
 import 'logging.dart';
 import 'options.dart';
 import 'precompile_binaries.dart';
+import 'publish_precompiled_artifacts.dart';
 import 'target.dart';
 import 'util.dart';
 import 'verify_binaries.dart';
@@ -236,6 +238,99 @@ class VerifyBinariesCommand extends Command {
   }
 }
 
+class PublishPrecompiledArtifactsCommand extends Command {
+  PublishPrecompiledArtifactsCommand() {
+    argParser
+      ..addOption(
+        'repository',
+        mandatory: true,
+        help: 'Github repository slug in format owner/name',
+      )
+      ..addOption(
+        'manifest-dir',
+        mandatory: true,
+        help: 'Directory containing Cargo.toml',
+      )
+      ..addOption(
+        'artifacts-dir',
+        mandatory: true,
+        help: 'Directory containing target artifact subdirectories',
+      )
+      ..addMultiOption(
+        'target',
+        help: 'Rust target triple of artifact to publish.',
+      );
+  }
+
+  @override
+  final name = 'publish-precompiled-artifacts';
+
+  @override
+  final description =
+      'Signs and uploads already-built artifacts to a precompiled release';
+
+  @override
+  Future<void> run() async {
+    final privateKeyString = Platform.environment['PRIVATE_KEY'];
+    if (privateKeyString == null) {
+      throw ArgumentError('Missing PRIVATE_KEY environment variable');
+    }
+
+    final githubToken = Platform.environment['GITHUB_TOKEN'];
+    if (githubToken == null) {
+      throw ArgumentError('Missing GITHUB_TOKEN environment variable');
+    }
+
+    final privateKey = HEX.decode(privateKeyString);
+    if (privateKey.length != 64) {
+      throw ArgumentError('Private key must be 64 bytes long');
+    }
+
+    final targetStrings = argResults!['target'] as List<String>;
+    if (targetStrings.isEmpty) {
+      throw ArgumentError('At least one --target must be specified');
+    }
+    final targets = targetStrings.map((target) {
+      final result = Target.forRustTriple(target);
+      if (result == null) {
+        throw ArgumentError('Invalid target: $target');
+      }
+      return result;
+    }).toList(growable: false);
+
+    await PublishPrecompiledArtifacts(
+      privateKey: PrivateKey(privateKey),
+      githubToken: githubToken,
+      repositorySlug: RepositorySlug.full(argResults!['repository'] as String),
+      manifestDir: argResults!['manifest-dir'] as String,
+      artifactsDir: argResults!['artifacts-dir'] as String,
+      targets: targets,
+    ).run();
+  }
+}
+
+class PrintCrateHashCommand extends Command {
+  PrintCrateHashCommand() {
+    argParser.addOption(
+      'manifest-dir',
+      mandatory: true,
+      help: 'Directory containing Cargo.toml',
+    );
+  }
+
+  @override
+  final name = 'print-crate-hash';
+
+  @override
+  final description = 'Prints cargokit crate hash for the manifest directory';
+
+  @override
+  void run() {
+    final manifestDir = argResults!['manifest-dir'] as String;
+    print(CrateHash.compute(manifestDir));
+  }
+}
+
 Future<void> runMain(List<String> args) async {
   try {
     // Init logging before options are loaded
@@ -251,6 +346,8 @@ Future<void> runMain(List<String> args) async {
       ..addCommand(BuildCMakeCommand())
       ..addCommand(GenKeyCommand())
       ..addCommand(PrecompileBinariesCommand())
+      ..addCommand(PublishPrecompiledArtifactsCommand())
+      ..addCommand(PrintCrateHashCommand())
       ..addCommand(VerifyBinariesCommand());
 
     await runner.run(args);
