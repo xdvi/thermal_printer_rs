@@ -12,6 +12,25 @@ import 'target.dart';
 
 String releaseTagForHash(String crateHash) => 'precompiled_$crateHash';
 
+String releaseTitleForVersion(String packageVersion) =>
+    'Precompiled binaries v$packageVersion';
+
+String releaseTitleForHash(String crateHash) =>
+    'Precompiled binaries ${crateHash.substring(0, 8)}';
+
+String desiredReleaseTitle({
+  required String? packageVersion,
+  required String crateHash,
+}) {
+  return packageVersion == null
+      ? releaseTitleForHash(crateHash)
+      : releaseTitleForVersion(packageVersion);
+}
+
+bool releaseTitleNeedsUpdate(Release release, String desiredTitle) {
+  return release.name != desiredTitle;
+}
+
 List<String> expectedLocalArtifactsForTarget(Target target, String libraryName) {
   return getArtifactNames(
     target: target,
@@ -120,6 +139,7 @@ class PublishPrecompiledArtifacts {
       repo: repo,
       tagName: releaseTagForHash(crateHash),
       packageName: crateInfo.packageName,
+      packageVersion: crateInfo.packageVersion,
       crateHash: crateHash,
     );
 
@@ -151,16 +171,30 @@ class PublishPrecompiledArtifacts {
     required RepositoriesService repo,
     required String tagName,
     required String packageName,
+    required String? packageVersion,
     required String crateHash,
   }) async {
+    final releaseTitle = desiredReleaseTitle(
+      packageVersion: packageVersion,
+      crateHash: crateHash,
+    );
+
     try {
-      return await repo.getReleaseByTagName(repositorySlug, tagName);
+      final release = await repo.getReleaseByTagName(repositorySlug, tagName);
+      if (!releaseTitleNeedsUpdate(release, releaseTitle)) {
+        return release;
+      }
+      return repo.editRelease(
+        repositorySlug,
+        release,
+        name: releaseTitle,
+      );
     } on ReleaseNotFound {
       return repo.createRelease(
         repositorySlug,
         CreateRelease.from(
           tagName: tagName,
-          name: 'Precompiled binaries ${crateHash.substring(0, 8)}',
+          name: releaseTitle,
           targetCommitish: null,
           isDraft: false,
           isPrerelease: false,

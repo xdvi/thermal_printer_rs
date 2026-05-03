@@ -12,6 +12,48 @@ void main() {
     expect(releaseTagForHash('abc123'), 'precompiled_abc123');
   });
 
+  test('releaseTitleForVersion formats a versioned release title', () {
+    expect(
+      releaseTitleForVersion('1.2.3'),
+      'Precompiled binaries v1.2.3',
+    );
+  });
+
+  test('releaseTitleForHash falls back to the short crate hash', () {
+    expect(
+      releaseTitleForHash('0123456789abcdef'),
+      'Precompiled binaries 01234567',
+    );
+  });
+
+  test('desiredReleaseTitle prefers version and falls back to hash', () {
+    expect(
+      desiredReleaseTitle(packageVersion: '1.2.3', crateHash: '0123456789abcdef'),
+      'Precompiled binaries v1.2.3',
+    );
+    expect(
+      desiredReleaseTitle(packageVersion: null, crateHash: '0123456789abcdef'),
+      'Precompiled binaries 01234567',
+    );
+  });
+
+  test('releaseTitleNeedsUpdate detects mismatched existing titles', () {
+    expect(
+      releaseTitleNeedsUpdate(
+        Release(name: 'Precompiled binaries 01234567'),
+        'Precompiled binaries v1.2.3',
+      ),
+      isTrue,
+    );
+    expect(
+      releaseTitleNeedsUpdate(
+        Release(name: 'Precompiled binaries v1.2.3'),
+        'Precompiled binaries v1.2.3',
+      ),
+      isFalse,
+    );
+  });
+
   test('expectedRemoteAssetsForTarget uses remote artifact names', () {
     final target = Target.forRustTriple('x86_64-pc-windows-msvc')!;
 
