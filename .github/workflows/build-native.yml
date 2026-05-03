@@ -46,8 +46,9 @@ jobs:
         run: cargo install cargo-ndk --locked
 
       - name: Build Android artifacts
+        working-directory: rust
         run: |
-          cargo ndk -t arm64-v8a -t armeabi-v7a --platform 21 build --manifest-path rust/Cargo.toml --release
+          cargo ndk -t arm64-v8a -t armeabi-v7a --platform 21 build --release
 
       - name: Stage Android artifacts
         run: |
