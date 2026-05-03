@@ -12,9 +12,6 @@ concurrency:
   group: build-native-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   android:
     name: Android
@@ -60,7 +57,7 @@ jobs:
           cp rust/target/armv7-linux-androideabi/release/libthermal_printer_rs.so prebuilt/armv7-linux-androideabi/
 
       - name: Upload Android artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: prebuilt-android
           path: prebuilt/
@@ -107,7 +104,7 @@ jobs:
           cp rust/target/x86_64-unknown-linux-gnu/release/libthermal_printer_rs.so prebuilt/x86_64-unknown-linux-gnu/
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: prebuilt-linux
           path: prebuilt/
@@ -144,7 +141,7 @@ jobs:
           Copy-Item rust/target/x86_64-pc-windows-msvc/release/thermal_printer_rs.dll.lib prebuilt/x86_64-pc-windows-msvc/
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: prebuilt-windows
           path: prebuilt/
@@ -193,7 +190,7 @@ jobs:
           cp rust/target/x86_64-apple-ios/release/libthermal_printer_rs.a prebuilt/x86_64-apple-ios/
 
       - name: Upload Darwin artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: prebuilt-darwin
           path: prebuilt/
@@ -218,7 +215,7 @@ jobs:
           cache: true
 
       - name: Download workflow artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: downloaded-artifacts
 
