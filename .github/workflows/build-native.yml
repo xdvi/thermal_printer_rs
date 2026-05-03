@@ -229,7 +229,10 @@ jobs:
       - name: Flatten artifacts for publishing
         run: |
           mkdir -p publish
-          find downloaded-artifacts -type d -path '*/prebuilt' -exec cp -R {}/. publish/ \;
+          cp -R downloaded-artifacts/prebuilt-android/. publish/
+          cp -R downloaded-artifacts/prebuilt-linux/. publish/
+          cp -R downloaded-artifacts/prebuilt-windows/. publish/
+          cp -R downloaded-artifacts/prebuilt-darwin/. publish/
 
       - name: Compute crate hash
         env:
