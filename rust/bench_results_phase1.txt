@@ -1,0 +1,55 @@
+   Compiling thermal_printer_rs v0.1.0 (/mnt/DATA/projects/thermal_printer_rs/rust)
+warning: variants `Connect` and `Disconnect` are never constructed
+  --> src/jobs.rs:19:5
+   |
+15 | pub enum PrintCommand {
+   |          ------------ variants in this enum
+...
+19 |     Connect,
+   |     ^^^^^^^
+20 |     /// Explicitly disconnect the transport.
+21 |     Disconnect,
+   |     ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `thermal_printer_rs` (lib) generated 1 warning
+warning: unused import: `TransportKind`
+ --> benches/performance_bench.rs:3:49
+  |
+3 | use thermal_printer_rs::config::{PrinterConfig, TransportKind};
+  |                                                 ^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `thermal_printer_rs` (bench "performance_bench") generated 1 warning (run `cargo fix --bench "performance_bench" -p thermal_printer_rs` to apply 1 suggestion)
+    Finished `bench` profile [optimized] target(s) in 11.41s
+     Running benches/performance_bench.rs (target/release/deps/performance_bench-64e38d6a509f8570)
+Gnuplot not found, using plotters backend
+Benchmarking adapter_build_text_2k
+Benchmarking adapter_build_text_2k: Analyzing
+adapter_build_text_2k   time:   [5.1961 µs 5.2501 µs 5.4657 µs]
+                        change: [-39.707% -37.573% -35.400%] (p = 0.07 > 0.05)
+                        No change in performance detected.
+
+Benchmarking adapter_build_receipt_8k
+Benchmarking adapter_build_receipt_8k: Analyzing
+adapter_build_receipt_8k
+                        time:   [201.97 µs 203.96 µs 204.45 µs]
+                        change: [+76.616% +78.733% +80.874%] (p = 0.10 > 0.05)
+                        No change in performance detected.
+
+Benchmarking service_send_buffer_128k
+Benchmarking service_send_buffer_128k: Analyzing
+service_send_buffer_128k
+                        time:   [160.93 µs 590.72 µs 698.17 µs]
+                        change: [+96.612% +427.65% +762.34%] (p = 0.12 > 0.05)
+                        No change in performance detected.
+
+Benchmarking service_print_text_2k_pipeline
+Benchmarking service_print_text_2k_pipeline: Analyzing
+service_print_text_2k_pipeline
+                        time:   [48.938 µs 49.365 µs 49.472 µs]
+                        change: [+539.60% +558.30% +577.91%] (p = 0.10 > 0.05)
+                        No change in performance detected.
+

@@ -1,0 +1,3 @@
+precompiled_binaries:
+  url_prefix: https://github.com/xdvi/thermal_printer_rs/releases/download/precompiled_
+  public_key: 5430aebf9022bedd5a20314e4ca5d88e566108640e81fa879d6307031283cf80
