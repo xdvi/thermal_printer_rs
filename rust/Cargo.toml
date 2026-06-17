@@ -13,7 +13,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 default     = ["tcp", "graphics", "codes_2d", "barcodes"]
 tcp         = []
 usb         = ["dep:rusb"]
-ble         = ["dep:btleplug"]
+ble         = ["dep:btleplug", "dep:uuid"]
 graphics    = ["escpos/graphics"]
 codes_2d    = ["escpos/codes_2d"]
 barcodes    = ["escpos/barcodes"]
@@ -32,6 +32,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync"
 # Transportes opcionales
 rusb     = { version = "0.9", optional = true }
 btleplug = { version = "0.11", optional = true }
+uuid     = { version = "1", features = ["v4"], optional = true }
 
 # Errores tipados
 thiserror = "1"
