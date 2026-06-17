@@ -24,7 +24,7 @@ use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter, WriteTyp
 use btleplug::platform::Manager;
 use std::time::Duration;
 use uuid::Uuid;
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn};
 
 use crate::errors::{PrinterError, Result};
 use super::Transport;
@@ -38,13 +38,12 @@ const DEFAULT_PRINT_CHAR_UUID:    &str = "00002af1-0000-1000-8000-00805f9b34fb";
 const DEFAULT_CHUNK_SIZE: usize = 182;
 
 pub struct BleTransport {
-    target_address:    String,
-    service_uuid:      Uuid,
-    char_uuid:         Uuid,
-    scan_timeout:      Duration,
-    write_timeout:     Duration,
-    chunk_size:        usize,
-    peripheral:        Option<btleplug::platform::Peripheral>,
+    target_address: String,
+    service_uuid:   Uuid,
+    char_uuid:      Uuid,
+    scan_timeout:   Duration,
+    chunk_size:     usize,
+    peripheral:     Option<btleplug::platform::Peripheral>,
 }
 
 impl BleTransport {
@@ -57,7 +56,6 @@ impl BleTransport {
             service_uuid:   Uuid::parse_str(DEFAULT_PRINT_SERVICE_UUID).unwrap(),
             char_uuid:      Uuid::parse_str(DEFAULT_PRINT_CHAR_UUID).unwrap(),
             scan_timeout:   Duration::from_millis(timeout_ms),
-            write_timeout:  Duration::from_millis(3000),
             chunk_size:     DEFAULT_CHUNK_SIZE,
             peripheral:     None,
         }
@@ -100,7 +98,7 @@ impl Transport for BleTransport {
 
         let target = self.target_address.to_uppercase();
         let peripheral = peripherals.into_iter().find(|p| {
-            p.id().to_string().to_uppercase().contains(&target)
+            p.id().to_string().to.uppercase().contains(&target)
         }).ok_or_else(|| PrinterError::PrinterNotFound(
             format!("BLE: printer {} not found during scan", self.target_address)
         ))?;
