@@ -5,7 +5,7 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch:   # Manual trigger
+  workflow_dispatch:
 
 jobs:
   rust:
@@ -36,7 +36,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.x'
+          flutter-version: '3.44.x'
           channel: 'stable'
       - name: Setup Rust (for FRB)
         uses: dtolnay/rust-toolchain@stable
