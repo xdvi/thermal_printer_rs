@@ -51,6 +51,27 @@ jobs:
         working-directory: rust
         run: cargo test
 
+  rust-full:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libusb-1.0-0-dev pkg-config
+
+      - name: Check full feature
+        working-directory: rust
+        run: cargo check --features full
+
+      - name: Test full feature
+        working-directory: rust
+        run: cargo test --features full
+
   flutter:
     runs-on: ${{ matrix.os }}
     strategy:
