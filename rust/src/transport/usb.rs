@@ -12,7 +12,7 @@
 
 use async_trait::async_trait;
 use rusb::{Context, DeviceHandle, UsbContext};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::errors::{PrinterError, Result};
 use super::Transport;
