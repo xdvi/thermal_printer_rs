@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use thermal_printer_rs::config::PrinterConfig;
 use thermal_printer_rs::escpos_adapter::{EscposAdapter, ReceiptLine};
 use thermal_printer_rs::printer::PrintService;
+use thermal_printer_rs::session::SessionControl;
 use thermal_printer_rs::transport::mock::{MockConfig, MockTransport};
 use tokio::runtime::Runtime;
 
@@ -25,7 +26,8 @@ fn create_mock_service(rt: &Runtime) -> (PrintService, Arc<Mutex<Vec<u8>>>) {
         },
     ));
     let config = PrinterConfig::default();
-    let service = PrintService::new_with_transport(config, transport);
+    let service =
+        PrintService::new_with_transport(config, transport, Arc::new(SessionControl::new()));
     (service, buffer)
 }
 

@@ -132,7 +132,7 @@ Rust (flutter_rust_bridge)
     ├── PrintWorker               — async background job queue (mpsc)
     └── Transport (trait)
             ├── TcpTransport      — TCP/IP (all platforms)
-            ├── UsbTransport      — USB Desktop (rusb/libusb)
+            ├── UsbTransport      — USB Desktop (nusb/libusb, cancellable mid-write)
             ├── BleTransport      — BLE Desktop+Mobile (btleplug)
             └── MockTransport     — in-memory (testing)
 ```

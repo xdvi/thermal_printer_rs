@@ -91,18 +91,17 @@ impl EscposAdapter {
         Ok(buf)
     }
 
-    /// Generates a complete receipt: title, lines, total and optional QR.
-    pub fn build_receipt(
+    /// Generates a complete receipt from string pairs (zero-copy labels/values).
+    pub fn build_receipt_pairs(
         &self,
         title: &str,
-        lines: &[ReceiptLine],
+        lines: &[(&str, &str)],
         total: &str,
         qr_data: Option<&str>,
     ) -> Result<Vec<u8>> {
         let sep = self.separator();
 
         let buf = self.with_printer(|p| {
-            // ── Header ────────────────────────────────────────────
             p.init()?
                 .justify(JustifyMode::CENTER)?
                 .bold(true)?
@@ -110,11 +109,10 @@ impl EscposAdapter {
                 .writeln(title)?
                 .bold(false)?
                 .writeln(&sep)?
-                // ── Product lines ──────────────────────────────────
                 .justify(JustifyMode::LEFT)?;
 
-            for line in lines {
-                let row = self.format_line(&line.label, &line.value);
+            for (label, value) in lines {
+                let row = self.format_line(label, value);
                 p.writeln(&row)?;
             }
 
@@ -144,6 +142,21 @@ impl EscposAdapter {
 
         debug!(bytes = buf.len(), "Complete receipt buffer generated");
         Ok(buf)
+    }
+
+    /// Generates a complete receipt: title, lines, total and optional QR.
+    pub fn build_receipt(
+        &self,
+        title: &str,
+        lines: &[ReceiptLine],
+        total: &str,
+        qr_data: Option<&str>,
+    ) -> Result<Vec<u8>> {
+        let pairs: Vec<(&str, &str)> = lines
+            .iter()
+            .map(|l| (l.label.as_str(), l.value.as_str()))
+            .collect();
+        self.build_receipt_pairs(title, &pairs, total, qr_data)
     }
 
     /// Generates a centered QR code with paper cut.

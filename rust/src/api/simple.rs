@@ -8,15 +8,17 @@ use flutter_rust_bridge::frb;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::sync::Arc;
-use tracing::info;
+use tokio::task::AbortHandle;
+use tracing::{error, info};
 
 use crate::{
     config::{CharEncoding, PrinterConfig, TransportKind},
     errors::PrinterError,
     jobs::{PrintCommand, PrintWorker},
     printer::PrintService,
+    session::SessionControl,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 // ── Thread-safe service singleton ───────────────────────────
 static SERVICE: Lazy<Mutex<Option<Arc<PrintService>>>> = Lazy::new(|| Mutex::new(None));
@@ -134,6 +136,102 @@ impl From<crate::jobs::WorkerState> for PrinterStateDto {
 static STATE_RECEIVER: Lazy<Mutex<Option<tokio::sync::watch::Receiver<crate::jobs::WorkerState>>>> =
     Lazy::new(|| Mutex::new(None));
 
+static WORKER_HANDLE: Lazy<Mutex<Option<tokio::task::JoinHandle<()>>>> =
+    Lazy::new(|| Mutex::new(None));
+
+static STATE_STREAM_ABORT: Lazy<Mutex<Option<AbortHandle>>> = Lazy::new(|| Mutex::new(None));
+
+static SESSION: Lazy<Mutex<Option<Arc<SessionControl>>>> = Lazy::new(|| Mutex::new(None));
+
+async fn shutdown_internal() {
+    if let Some(session) = SESSION.lock().take() {
+        session.signal_cancel();
+        session.queue_budget.reset();
+    }
+    if let Some(abort) = STATE_STREAM_ABORT.lock().take() {
+        abort.abort();
+    }
+
+    let sender = COMMAND_SENDER.lock().take();
+    if let Some(tx) = sender {
+        let _ = tx.send(PrintCommand::Disconnect).await;
+    }
+
+    let handle = WORKER_HANDLE.lock().take();
+    if let Some(handle) = handle {
+        let _ = handle.await;
+    }
+
+    let service = SERVICE.lock().take();
+    if let Some(service) = service {
+        let _ = service.disconnect().await;
+    }
+
+    *STATE_RECEIVER.lock() = None;
+}
+
+async fn dispatch_print_await(buf: Vec<u8>) -> Result<usize, String> {
+    let session = SESSION
+        .lock()
+        .clone()
+        .ok_or("PrintService not initialized")?;
+    let len = buf.len();
+    session
+        .queue_budget
+        .try_reserve(len)
+        .map_err(|e| e.to_string())?;
+
+    let sender = COMMAND_SENDER
+        .lock()
+        .clone()
+        .ok_or("Background worker not running")?;
+
+    let (tx, rx) = oneshot::channel();
+    if sender
+        .send(PrintCommand::PrintAwait { buf, resp: tx })
+        .await
+        .is_err()
+    {
+        session.queue_budget.release(len);
+        return Err("Background worker not running".into());
+    }
+
+    match rx.await {
+        Ok(Ok(n)) => Ok(n),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => {
+            session.queue_budget.release(len);
+            Err("Background worker dropped".into())
+        }
+    }
+}
+
+fn enqueue_with_budget(bytes: Vec<u8>) -> Result<(), String> {
+    let session = SESSION
+        .lock()
+        .clone()
+        .ok_or("PrintService not initialized")?;
+    let len = bytes.len();
+    session
+        .queue_budget
+        .try_reserve(len)
+        .map_err(|e| e.to_string())?;
+
+    let tx = COMMAND_SENDER
+        .lock()
+        .as_ref()
+        .ok_or("Background worker not running")?
+        .clone();
+
+    match tx.try_send(PrintCommand::Print(bytes)) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            session.queue_budget.release(len);
+            Err(format!("Failed to enqueue: {e}"))
+        }
+    }
+}
+
 /// Returns the current printer state as a synchronous snapshot.
 /// Useful for polling or checking state before an operation.
 #[frb(sync)]
@@ -165,7 +263,11 @@ pub fn create_state_stream(
             .ok_or("PrintService not initialized")?
     };
 
-    tokio::spawn(async move {
+    if let Some(abort) = STATE_STREAM_ABORT.lock().take() {
+        abort.abort();
+    }
+
+    let task = tokio::spawn(async move {
         let mut watch_rx = rx;
         let _ = sink.add(PrinterStateDto::from(*watch_rx.borrow()));
         while watch_rx.changed().await.is_ok() {
@@ -175,25 +277,31 @@ pub fn create_state_stream(
             }
         }
     });
+    *STATE_STREAM_ABORT.lock() = Some(task.abort_handle());
 
     Ok(())
 }
 
 /// Initializes the print service.
 pub async fn init_printer(config: PrinterConfigDto) -> Result<(), String> {
+    shutdown_internal().await;
+
     let printer_config = build_config(config).map_err(|e| e.to_string())?;
-    let service = PrintService::new(printer_config).map_err(|e| e.to_string())?;
+    let session = Arc::new(SessionControl::new());
+    let service = PrintService::new(printer_config, session.clone()).map_err(|e| e.to_string())?;
     let service_arc = Arc::new(service);
 
-    let (tx, rx) = mpsc::channel(1024);
+    let (tx, rx) = mpsc::channel(256);
     let (state_tx, state_rx) = tokio::sync::watch::channel(crate::jobs::WorkerState::Disconnected);
 
-    let worker = PrintWorker::new(service_arc.clone(), rx, state_tx);
-    tokio::spawn(worker.run());
+    let worker = PrintWorker::new(service_arc.clone(), rx, state_tx, session.clone());
+    let worker_handle = tokio::spawn(worker.run());
 
+    *SESSION.lock() = Some(session);
     *SERVICE.lock() = Some(service_arc);
     *COMMAND_SENDER.lock() = Some(tx);
     *STATE_RECEIVER.lock() = Some(state_rx);
+    *WORKER_HANDLE.lock() = Some(worker_handle);
 
     info!("PrintService initialized (Phase 1 IO task active, Phase 5 State tracking active)");
     Ok(())
@@ -215,15 +323,19 @@ pub async fn connect_printer() -> Result<(), String> {
 
 /// Prints simple text.
 pub async fn print_text(text: String) -> PrintResultDto {
-    let service = {
+    let buf = {
         let guard = SERVICE.lock();
-        match guard.as_ref().cloned() {
+        let svc = match guard.as_ref() {
             Some(s) => s,
             None => return PrintResultDto::err("PrintService not initialized"),
+        };
+        match svc.adapter().build_text(&text) {
+            Ok(b) => b,
+            Err(e) => return PrintResultDto::err(e),
         }
     };
 
-    match service.print_text(&text).await {
+    match dispatch_print_await(buf).await {
         Ok(n) => PrintResultDto::ok(n),
         Err(e) => PrintResultDto::err(e),
     }
@@ -236,23 +348,26 @@ pub async fn print_receipt(
     total: String,
     qr_data: Option<String>,
 ) -> PrintResultDto {
-    let service = {
+    let buf = {
         let guard = SERVICE.lock();
-        match guard.as_ref().cloned() {
+        let svc = match guard.as_ref() {
             Some(s) => s,
             None => return PrintResultDto::err("PrintService not initialized"),
+        };
+        let pairs: Vec<(&str, &str)> = lines
+            .iter()
+            .map(|l| (l.label.as_str(), l.value.as_str()))
+            .collect();
+        match svc
+            .adapter()
+            .build_receipt_pairs(&title, &pairs, &total, qr_data.as_deref())
+        {
+            Ok(b) => b,
+            Err(e) => return PrintResultDto::err(e),
         }
     };
 
-    let pairs: Vec<(&str, &str)> = lines
-        .iter()
-        .map(|l| (l.label.as_str(), l.value.as_str()))
-        .collect();
-
-    match service
-        .print_receipt(&title, &pairs, &total, qr_data.as_deref())
-        .await
-    {
+    match dispatch_print_await(buf).await {
         Ok(n) => PrintResultDto::ok(n),
         Err(e) => PrintResultDto::err(e),
     }
@@ -260,21 +375,17 @@ pub async fn print_receipt(
 
 /// Disconnects the transport and stops the worker.
 pub async fn disconnect_printer() -> Result<(), String> {
-    let tx = COMMAND_SENDER.lock().take();
-    if let Some(sender) = tx {
-        let _ = sender.send(PrintCommand::Disconnect).await;
-    }
-
-    let maybe_service = SERVICE.lock().take();
-    if let Some(service) = maybe_service {
-        service.disconnect().await.map_err(|e| e.to_string())?;
-        info!("PrintService disconnected");
-    }
+    shutdown_internal().await;
+    info!("PrintService disconnected");
     Ok(())
 }
 
 /// Drains all pending jobs in the background worker.
 pub async fn clear_print_queue() -> Result<(), String> {
+    if let Some(session) = SESSION.lock().as_ref() {
+        session.signal_cancel();
+    }
+
     let tx = {
         let guard = COMMAND_SENDER.lock();
         guard.as_ref().cloned().ok_or("Worker not running")?
@@ -291,18 +402,7 @@ pub async fn clear_print_queue() -> Result<(), String> {
 /// Use this when the caller needs to know the bytes were actually transmitted
 /// before proceeding (e.g., before cutting paper or opening a drawer).
 pub async fn write_raw_bytes(bytes: Vec<u8>) -> Result<(), String> {
-    let service = {
-        let guard = SERVICE.lock();
-        guard
-            .as_ref()
-            .cloned()
-            .ok_or("PrintService not initialized")?
-    };
-    service
-        .send_buffer_owned_retrying(bytes)
-        .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    dispatch_print_await(bytes).await.map(|_| ())
 }
 
 /// Reads raw bytes from the transport.
@@ -328,21 +428,16 @@ pub async fn read_raw_bytes(bytes: u32, timeout_ms: u64) -> Result<Vec<u8>, Stri
 /// acknowledgement that the hardware has actually received them.
 /// Use [write_raw_bytes] if you need confirmed delivery.
 pub fn enqueue_write_bytes(bytes: Vec<u8>) -> Result<(), String> {
-    let sender_guard = COMMAND_SENDER.lock();
-    let tx = sender_guard
-        .as_ref()
-        .ok_or("Background worker not running")?;
-
-    tx.try_send(PrintCommand::Print(bytes))
-        .map_err(|e| format!("Failed to enqueue: {}", e))?;
-    Ok(())
+    enqueue_with_budget(bytes)
 }
 
 /// Enqueues a text print job (non-blocking).
 pub fn enqueue_print_text(text: String) -> Result<(), String> {
-    let guard = SERVICE.lock();
-    let svc = guard.as_ref().ok_or("PrintService not initialized")?;
-    let buf = svc.adapter().build_text(&text).map_err(|e| e.to_string())?;
+    let buf = {
+        let guard = SERVICE.lock();
+        let svc = guard.as_ref().ok_or("PrintService not initialized")?;
+        svc.adapter().build_text(&text).map_err(|e| e.to_string())?
+    };
 
     enqueue_write_bytes(buf)
 }
@@ -354,21 +449,22 @@ pub fn enqueue_print_receipt(
     total: String,
     qr_data: Option<String>,
 ) -> Result<(), String> {
-    let guard = SERVICE.lock();
-    let svc = guard.as_ref().ok_or("PrintService not initialized")?;
+    let buf = {
+        let guard = SERVICE.lock();
+        let svc = guard.as_ref().ok_or("PrintService not initialized")?;
 
-    let receipt_lines: Vec<crate::escpos_adapter::ReceiptLine> = lines
-        .into_iter()
-        .map(|l| crate::escpos_adapter::ReceiptLine {
-            label: l.label,
-            value: l.value,
-        })
-        .collect();
+        let receipt_lines: Vec<crate::escpos_adapter::ReceiptLine> = lines
+            .into_iter()
+            .map(|l| crate::escpos_adapter::ReceiptLine {
+                label: l.label,
+                value: l.value,
+            })
+            .collect();
 
-    let buf = svc
-        .adapter()
-        .build_receipt(&title, &receipt_lines, &total, qr_data.as_deref())
-        .map_err(|e| e.to_string())?;
+        svc.adapter()
+            .build_receipt(&title, &receipt_lines, &total, qr_data.as_deref())
+            .map_err(|e| e.to_string())?
+    };
 
     enqueue_write_bytes(buf)
 }
@@ -381,14 +477,40 @@ pub fn enqueue_print_receipt(
 ///
 /// Returns the complete ESC/POS byte sequence, ready to send to the printer.
 pub async fn encode_raster_image(rgba: Vec<u8>, width: i64, height: i64) -> Vec<u8> {
-    tokio::task::spawn_blocking(move || _dither_and_encode(&rgba, width as usize, height as usize))
-        .await
-        .unwrap_or_default()
+    let width = width as usize;
+    let height = height as usize;
+    match tokio::task::spawn_blocking(move || _dither_and_encode(&rgba, width, height)).await {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(e)) => {
+            error!(error = %e, "Raster encode validation failed");
+            Vec::new()
+        }
+        Err(e) => {
+            error!(error = %e, "Raster encode task failed");
+            Vec::new()
+        }
+    }
 }
 
 // ── Raster image internals (not exposed to Dart) ─────────────────────────
 
-fn _dither_and_encode(rgba: &[u8], width: usize, height: usize) -> Vec<u8> {
+fn _dither_and_encode(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>, PrinterError> {
+    if width == 0 || height == 0 {
+        return Err(PrinterError::InvalidConfig(
+            "Raster image width and height must be > 0".into(),
+        ));
+    }
+    let required = width
+        .checked_mul(height)
+        .and_then(|p| p.checked_mul(4))
+        .ok_or_else(|| PrinterError::InvalidConfig("Raster image dimensions overflow".into()))?;
+    if rgba.len() < required {
+        return Err(PrinterError::InvalidConfig(format!(
+            "RGBA buffer too small: need {required} bytes, got {}",
+            rgba.len()
+        )));
+    }
+
     let n = width * height;
     let mut gray = vec![0i32; n];
 
@@ -475,7 +597,7 @@ fn _dither_and_encode(rgba: &[u8], width: usize, height: usize) -> Vec<u8> {
         }
     }
 
-    cmd
+    Ok(cmd)
 }
 
 #[frb(sync)]

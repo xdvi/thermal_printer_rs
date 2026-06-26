@@ -13,6 +13,9 @@ import 'printer_status_poller.dart';
 /// Native method channel for Android-specific transports.
 const _channel = MethodChannel('thermal_printer_rs/android');
 
+Uint8List _asUint8List(List<int> data) =>
+    data is Uint8List ? data : Uint8List.fromList(data);
+
 // ── Device discovery ─────────────────────────────────────────────
 
 /// Describes a paired Bluetooth device.
@@ -105,8 +108,13 @@ class AndroidBluetoothTransport {
   ///
   /// Throws [PlatformException] if connection fails.
   Future<void> connect(String address) async {
-    await _channel.invokeMethod<bool>('bt_connect', {'address': address});
-    _connected = true;
+    try {
+      await _channel.invokeMethod<bool>('bt_connect', {'address': address});
+      _connected = true;
+    } catch (_) {
+      _connected = false;
+      rethrow;
+    }
   }
 
   /// Sends raw ESC/POS bytes to the printer.
@@ -139,16 +147,22 @@ class AndroidBluetoothTransport {
   /// Works by sending ESC/POS status commands and reading the response.
   Future<HardwareStatus> checkStatus() async {
     return PrinterStatusPoller.checkStatus(
-      write: (data) => write(Uint8List.fromList(data)),
+      write: (data) => write(_asUint8List(data)),
       read: (bytes) => read(bytes, timeoutMs: 1500),
     );
   }
 
   /// Disconnects and releases the Bluetooth socket.
   Future<void> disconnect() async {
-    await _channel.invokeMethod<bool>('bt_disconnect');
-    _connected = false;
+    try {
+      await _channel.invokeMethod<bool>('bt_disconnect');
+    } finally {
+      _connected = false;
+    }
   }
+
+  /// Releases native resources. Alias for [disconnect].
+  Future<void> dispose() => disconnect();
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -192,11 +206,16 @@ class AndroidUsbTransport {
   /// Will trigger an OS permission dialog if permission has not been granted.
   /// Throws [PlatformException] if connection fails or permission is denied.
   Future<void> connect({required int vendorId, required int productId}) async {
-    await _channel.invokeMethod<bool>('usb_connect', {
-      'vendorId': vendorId,
-      'productId': productId,
-    });
-    _connected = true;
+    try {
+      await _channel.invokeMethod<bool>('usb_connect', {
+        'vendorId': vendorId,
+        'productId': productId,
+      });
+      _connected = true;
+    } catch (_) {
+      _connected = false;
+      rethrow;
+    }
   }
 
   /// Sends raw ESC/POS bytes to the connected USB printer.
@@ -229,14 +248,20 @@ class AndroidUsbTransport {
   /// Works by sending ESC/POS status commands and reading the response.
   Future<HardwareStatus> checkStatus() async {
     return PrinterStatusPoller.checkStatus(
-      write: (data) => write(Uint8List.fromList(data)),
+      write: (data) => write(_asUint8List(data)),
       read: (bytes) => read(bytes, timeoutMs: 1000),
     );
   }
 
   /// Releases the USB interface and closes the connection.
   Future<void> disconnect() async {
-    await _channel.invokeMethod<bool>('usb_disconnect');
-    _connected = false;
+    try {
+      await _channel.invokeMethod<bool>('usb_disconnect');
+    } finally {
+      _connected = false;
+    }
   }
+
+  /// Releases native resources. Alias for [disconnect].
+  Future<void> dispose() => disconnect();
 }

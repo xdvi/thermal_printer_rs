@@ -94,7 +94,9 @@ class TicketBuilder {
 
   /// Feeds [n] blank lines.
   void feed([int n = 1]) {
-    _builder.add(List.filled(n, _LF));
+    for (var i = 0; i < n; i++) {
+      _builder.addByte(_LF);
+    }
   }
 
   /// Alias for [feed].
@@ -308,6 +310,11 @@ class TicketBuilder {
       width: width,
       height: height,
     );
+    if (command.isEmpty) {
+      throw StateError(
+        'Raster encode failed — check image dimensions and RGBA buffer size.',
+      );
+    }
     _builder.add(command);
   }
 
@@ -366,6 +373,10 @@ class TicketBuilder {
   }
 
   void _applySize(PrinterSize height, PrinterSize width) {
+    if (height == _currentHeight && width == _currentWidth) {
+      return;
+    }
+
     var v = 0;
     if (height == PrinterSize.medium || height == PrinterSize.large) {
       v |= 0x10;

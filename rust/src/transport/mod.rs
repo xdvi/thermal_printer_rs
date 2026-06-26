@@ -33,6 +33,11 @@ pub trait Transport: Send + Sync {
     /// Indicates if the connection is currently active.
     fn is_connected(&self) -> bool;
 
+    /// Verifies the transport link is still usable (liveness probe).
+    async fn check_liveness(&mut self) -> bool {
+        self.is_connected()
+    }
+
     /// Descriptive name of the transport for logging.
     fn transport_name(&self) -> &'static str;
 

@@ -3,12 +3,24 @@ import 'printer_enums.dart';
 
 /// Helper class to query printer hardware status using ESC/POS commands.
 class PrinterStatusPoller {
+  static DateTime? _lastPoll;
+  static const _minPollInterval = Duration(milliseconds: 250);
+
   /// Queries the printer by sending DLE EOT commands and reading the response.
   /// Requires a [write] closure to send bytes and a [read] closure to fetch responses.
+  ///
+  /// Enforces a minimum 250 ms gap between polls to avoid hammering the device.
   static Future<HardwareStatus> checkStatus({
     required Future<void> Function(List<int>) write,
     required Future<Uint8List> Function(int bytesToRead) read,
   }) async {
+    if (_lastPoll != null) {
+      final elapsed = DateTime.now().difference(_lastPoll!);
+      if (elapsed < _minPollInterval) {
+        await Future<void>.delayed(_minPollInterval - elapsed);
+      }
+    }
+    _lastPoll = DateTime.now();
     bool isPaperOut = false;
     bool isCoverOpen = false;
     bool isDrawerOpen = false;

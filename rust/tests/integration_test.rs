@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use thermal_printer_rs::config::{CharEncoding, PrinterConfig, TransportKind};
 use thermal_printer_rs::printer::PrintService;
+use thermal_printer_rs::session::SessionControl;
 use thermal_printer_rs::transport::mock::{MockConfig, MockTransport};
 
 // Helper: creates a PrintService wired to a MockTransport.
@@ -29,7 +30,11 @@ fn make_mock_service(config: MockConfig) -> (PrintService, Arc<Mutex<Vec<u8>>>) 
         encoding: CharEncoding::default(),
         max_retries: 0,
     };
-    let service = PrintService::new_with_transport(printer_config, transport);
+    let service = PrintService::new_with_transport(
+        printer_config,
+        transport,
+        Arc::new(SessionControl::new()),
+    );
     (service, buffer)
 }
 
@@ -195,5 +200,77 @@ fn test_send_buffer_owned_writes_raw_bytes() {
             .expect("send_buffer_owned should succeed");
         assert_eq!(bytes, raw.len());
         assert_eq!(*buffer.lock().unwrap(), raw);
+    });
+}
+
+#[test]
+fn test_clear_queue_cancels_retry_backoff() {
+    rt().block_on(async {
+        let session = Arc::new(SessionControl::new());
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let transport = Box::new(MockTransport::new_with_buffer(buffer.clone()).with_config(
+            MockConfig {
+                fail_on_write: true,
+                ..Default::default()
+            },
+        ));
+        let printer_config = PrinterConfig {
+            transport: TransportKind::Tcp {
+                host: "127.0.0.1".into(),
+                port: 9100,
+            },
+            timeout_ms: 1000,
+            paper_width: 48,
+            encoding: CharEncoding::default(),
+            max_retries: 3,
+        };
+        let service = PrintService::new_with_transport(printer_config, transport, session.clone());
+
+        service.connect().await.unwrap();
+        session.signal_cancel();
+
+        let result = service.send_buffer_owned_retrying(vec![0x1b, 0x40]).await;
+        assert!(
+            matches!(
+                result,
+                Err(thermal_printer_rs::errors::PrinterError::JobCancelled)
+            ),
+            "expected JobCancelled after signal_cancel, got {result:?}"
+        );
+    });
+}
+
+#[test]
+fn test_send_buffer_without_retries_succeeds() {
+    rt().block_on(async {
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let transport = Box::new(MockTransport::new_with_buffer(buffer.clone()).with_config(
+            MockConfig {
+                starts_connected: true,
+                ..Default::default()
+            },
+        ));
+        let printer_config = PrinterConfig {
+            transport: TransportKind::Tcp {
+                host: "127.0.0.1".into(),
+                port: 9100,
+            },
+            timeout_ms: 1000,
+            paper_width: 48,
+            encoding: CharEncoding::default(),
+            max_retries: 0,
+        };
+        let service = PrintService::new_with_transport(
+            printer_config,
+            transport,
+            Arc::new(SessionControl::new()),
+        );
+        let payload = vec![0xAA; 4096];
+        let sent = service
+            .send_buffer_owned_retrying(payload.clone())
+            .await
+            .expect("send without retries should succeed");
+        assert_eq!(sent, payload.len());
+        assert_eq!(*buffer.lock().unwrap(), payload);
     });
 }

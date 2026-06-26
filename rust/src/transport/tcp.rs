@@ -121,6 +121,17 @@ impl Transport for TcpTransport {
         self.stream.is_some()
     }
 
+    async fn check_liveness(&mut self) -> bool {
+        if let Some(stream) = &mut self.stream {
+            matches!(
+                timeout(Duration::from_millis(200), stream.writable()).await,
+                Ok(Ok(()))
+            )
+        } else {
+            false
+        }
+    }
+
     fn transport_name(&self) -> &'static str {
         "TcpTransport"
     }

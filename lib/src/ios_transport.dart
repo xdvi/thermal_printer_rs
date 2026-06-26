@@ -16,6 +16,9 @@ import 'package:flutter/services.dart';
 /// Native method channel for the iOS BLE bridge.
 const _channel = MethodChannel('thermal_printer_rs/ios');
 
+Uint8List _asUint8List(List<int> data) =>
+    data is Uint8List ? data : Uint8List.fromList(data);
+
 // ── Device model ─────────────────────────────────────────────────
 
 /// Represents a BLE peripheral discovered during scan.
@@ -105,12 +108,17 @@ class IosBleTransport {
     String? serviceUuid,
     String? characteristicUuid,
   }) async {
-    await _channel.invokeMethod<bool>('ble_connect', {
-      'uuid':               peripheralUuid,
-      'serviceUuid':        serviceUuid,
-      'characteristicUuid': characteristicUuid,
-    });
-    _connected = true;
+    try {
+      await _channel.invokeMethod<bool>('ble_connect', {
+        'uuid': peripheralUuid,
+        'serviceUuid': serviceUuid,
+        'characteristicUuid': characteristicUuid,
+      });
+      _connected = true;
+    } catch (_) {
+      _connected = false;
+      rethrow;
+    }
   }
 
   // ── Data transfer ──────────────────────────────────────────────
@@ -124,7 +132,7 @@ class IosBleTransport {
       throw StateError('IosBleTransport: not connected. Call connect() first.');
     }
     await _channel.invokeMethod<bool>('ble_write', {
-      'data': Uint8List.fromList(data),
+      'data': _asUint8List(data),
     });
   }
 
@@ -132,7 +140,13 @@ class IosBleTransport {
 
   /// Disconnects from the BLE peripheral and releases CoreBluetooth resources.
   Future<void> disconnect() async {
-    await _channel.invokeMethod<bool>('ble_disconnect');
-    _connected = false;
+    try {
+      await _channel.invokeMethod<bool>('ble_disconnect');
+    } finally {
+      _connected = false;
+    }
   }
+
+  /// Releases native resources. Alias for [disconnect].
+  Future<void> dispose() => disconnect();
 }

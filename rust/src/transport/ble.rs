@@ -35,7 +35,8 @@ const DEFAULT_PRINT_CHAR_UUID: &str = "00002af1-0000-1000-8000-00805f9b34fb";
 
 /// Default chunk size — conservative for maximum compatibility.
 /// Negotiate MTU with the printer to increase it.
-const DEFAULT_CHUNK_SIZE: usize = 182;
+const DEFAULT_CHUNK_SIZE: usize = 20;
+const MAX_SCAN_MS: u64 = 5_000;
 
 pub struct BleTransport {
     target_address: String,
@@ -56,6 +57,20 @@ impl BleTransport {
             chunk_size: DEFAULT_CHUNK_SIZE,
             peripheral: None,
         }
+    }
+
+    async fn find_peripheral(
+        central: &btleplug::platform::Adapter,
+        target: &str,
+    ) -> Result<Option<btleplug::platform::Peripheral>> {
+        let peripherals = central
+            .peripherals()
+            .await
+            .map_err(|e| PrinterError::ConnectionFailed(format!("Peripherals error: {e}")))?;
+
+        Ok(peripherals
+            .into_iter()
+            .find(|p| p.id().to_string().to_uppercase().contains(target)))
     }
 
     pub fn with_uuids(mut self, service: &str, characteristic: &str) -> Result<Self> {
@@ -84,32 +99,27 @@ impl Transport for BleTransport {
             PrinterError::TransportUnavailable("No Bluetooth adapter found. Is BT enabled?".into())
         })?;
 
-        // Scan for BLE devices
-        info!("Scanning for BLE devices...");
-        central
-            .start_scan(ScanFilter::default())
-            .await
-            .map_err(|e| PrinterError::ConnectionFailed(format!("Scan error: {e}")))?;
-
-        tokio::time::sleep(self.scan_timeout).await;
-        central.stop_scan().await.ok();
-
-        // Find printer by MAC address
-        let peripherals = central
-            .peripherals()
-            .await
-            .map_err(|e| PrinterError::ConnectionFailed(format!("Peripherals error: {e}")))?;
-
         let target = self.target_address.to_uppercase();
-        let peripheral = peripherals
-            .into_iter()
-            .find(|p| p.id().to_string().to_uppercase().contains(&target))
-            .ok_or_else(|| {
-                PrinterError::PrinterNotFound(format!(
-                    "BLE: printer {} not found during scan",
-                    self.target_address
-                ))
-            })?;
+        let mut peripheral = Self::find_peripheral(&central, &target).await?;
+
+        if peripheral.is_none() {
+            let scan_ms = self.scan_timeout.as_millis().min(MAX_SCAN_MS as u128) as u64;
+            info!(scan_ms, "BLE device not cached — scanning...");
+            central
+                .start_scan(ScanFilter::default())
+                .await
+                .map_err(|e| PrinterError::ConnectionFailed(format!("Scan error: {e}")))?;
+            tokio::time::sleep(Duration::from_millis(scan_ms)).await;
+            central.stop_scan().await.ok();
+            peripheral = Self::find_peripheral(&central, &target).await?;
+        }
+
+        let peripheral = peripheral.ok_or_else(|| {
+            PrinterError::PrinterNotFound(format!(
+                "BLE: printer {} not found during scan",
+                self.target_address
+            ))
+        })?;
 
         peripheral
             .connect()
@@ -165,6 +175,14 @@ impl Transport for BleTransport {
 
     fn is_connected(&self) -> bool {
         self.peripheral.is_some()
+    }
+
+    async fn check_liveness(&mut self) -> bool {
+        if let Some(p) = &self.peripheral {
+            p.is_connected().await.unwrap_or(false)
+        } else {
+            false
+        }
     }
 
     fn transport_name(&self) -> &'static str {

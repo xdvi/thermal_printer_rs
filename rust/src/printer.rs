@@ -5,13 +5,16 @@
 // and minimized memory copies.
 // ============================================================
 
+use std::sync::Arc;
+
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, instrument, warn};
 
 use crate::{
     config::{PrinterConfig, TransportKind},
     errors::{PrinterError, Result},
-    escpos_adapter::{EscposAdapter, ReceiptLine},
+    escpos_adapter::EscposAdapter,
+    session::SessionControl,
     transport::{tcp::TcpTransport, Transport},
 };
 
@@ -50,11 +53,12 @@ pub struct PrintService {
     cmd_tx: mpsc::Sender<IoCommand>,
     adapter: EscposAdapter,
     config: PrinterConfig,
+    session: Arc<SessionControl>,
 }
 
 impl PrintService {
     /// Creates a PrintService from configuration and spawns the IO task.
-    pub fn new(config: PrinterConfig) -> Result<Self> {
+    pub fn new(config: PrinterConfig, session: Arc<SessionControl>) -> Result<Self> {
         let transport: Box<dyn Transport> = match &config.transport {
             TransportKind::Tcp { host, port } => Box::new(TcpTransport::new(
                 host.clone(),
@@ -71,6 +75,7 @@ impl PrintService {
                 *vendor_id,
                 *product_id,
                 config.timeout_ms,
+                session.cancel_token(),
             )),
 
             #[cfg(feature = "ble")]
@@ -92,11 +97,16 @@ impl PrintService {
             cmd_tx,
             adapter: EscposAdapter::new(paper_width),
             config,
+            session,
         })
     }
 
     /// Creates a PrintService with a pre-built transport instance.
-    pub fn new_with_transport(config: PrinterConfig, transport: Box<dyn Transport>) -> Self {
+    pub fn new_with_transport(
+        config: PrinterConfig,
+        transport: Box<dyn Transport>,
+        session: Arc<SessionControl>,
+    ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel(100);
         let paper_width = config.paper_width;
 
@@ -106,6 +116,7 @@ impl PrintService {
             cmd_tx,
             adapter: EscposAdapter::new(paper_width),
             config,
+            session,
         }
     }
 
@@ -138,16 +149,9 @@ impl PrintService {
         qr_data: Option<&str>,
     ) -> Result<usize> {
         self.ensure_connected().await?;
-        let receipt_lines: Vec<ReceiptLine> = lines
-            .iter()
-            .map(|(l, v)| ReceiptLine {
-                label: l.to_string(),
-                value: v.to_string(),
-            })
-            .collect();
         let buf = self
             .adapter
-            .build_receipt(title, &receipt_lines, total, qr_data)?;
+            .build_receipt_pairs(title, lines, total, qr_data)?;
         self.send_buffer_owned(buf).await
     }
 
@@ -178,25 +182,40 @@ impl PrintService {
     /// Sends an owned buffer with automatic reconnection and retries.
     /// Callers that already own a Vec should use this to avoid any copies.
     pub async fn send_buffer_owned_retrying(&self, buf: Vec<u8>) -> Result<usize> {
-        // First attempt: move the owned buffer — zero copy.
-        match self.send_buffer_owned(buf.clone()).await {
+        let cancel = self.session.cancel_token();
+        if cancel.is_cancelled() {
+            return Err(PrinterError::JobCancelled);
+        }
+
+        if self.config.max_retries == 0 {
+            return self.send_buffer_owned(buf).await;
+        }
+
+        let backup = buf.clone();
+        match self.send_buffer_owned(buf).await {
             Ok(n) => Ok(n),
             Err(e) => {
                 error!(error = %e, "Send buffer failed (attempt 1)");
-                // Keep a clone so we can retry from the same data.
                 let mut last_err = e;
 
                 for attempt in 1..=self.config.max_retries {
+                    if cancel.is_cancelled() {
+                        return Err(PrinterError::JobCancelled);
+                    }
+
                     let backoff =
                         std::time::Duration::from_millis(500 * 2u64.pow(attempt as u32 - 1));
                     warn!(attempt, ?backoff, "Retrying buffer send...");
-                    tokio::time::sleep(backoff).await;
+                    tokio::select! {
+                        _ = cancel.cancelled() => return Err(PrinterError::JobCancelled),
+                        _ = tokio::time::sleep(backoff) => {}
+                    }
 
                     if !self.is_connected().await {
                         let _ = self.connect().await;
                     }
 
-                    match self.send_buffer_owned(buf.clone()).await {
+                    match self.send_buffer_owned(backup.clone()).await {
                         Ok(n) => return Ok(n),
                         Err(e) => {
                             error!(error = %e, "Send buffer failed (attempt {})", attempt + 1);
@@ -319,13 +338,18 @@ async fn io_task(mut transport: Box<dyn Transport>, mut cmd_rx: mpsc::Receiver<I
                 let _ = resp.send(read_res);
             }
             IoCommand::IsConnected { resp } => {
-                let _ = resp.send(transport.is_connected());
+                let alive = transport.check_liveness().await;
+                let _ = resp.send(alive);
             }
             IoCommand::Disconnect { resp } => {
                 let res = transport.disconnect().await;
                 let _ = resp.send(res);
             }
         }
+    }
+
+    if let Err(e) = transport.disconnect().await {
+        warn!(error = %e, "IO task disconnect on shutdown failed");
     }
 
     info!("IO Task stopped");

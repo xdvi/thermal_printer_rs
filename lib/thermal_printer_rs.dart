@@ -21,6 +21,7 @@
 /// ```
 library;
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -62,24 +63,27 @@ class ThermalPrinterRs {
 
   // ── Capability detection ──────────────────────────────────────────
 
+  static List<ConnectionType>? _cachedCapabilities;
+
   /// Returns the [ConnectionType]s compiled into this build.
   static List<ConnectionType> get capabilities {
+    return _cachedCapabilities ??= _buildCapabilities();
+  }
+
+  static List<ConnectionType> _buildCapabilities() {
     final caps = <ConnectionType>[ConnectionType.tcp];
-    // USB available on Linux, macOS, Windows (libusb). Android has its own bridge.
     if (Platform.isLinux ||
         Platform.isMacOS ||
         Platform.isWindows ||
         Platform.isAndroid) {
       caps.add(ConnectionType.usb);
     }
-    // BLE available everywhere except vanilla Windows < 10
     caps.add(ConnectionType.bluetooth);
-    return caps;
+    return List.unmodifiable(caps);
   }
 
   /// Returns the [ConnectionType]s currently usable at runtime on this device.
   static List<ConnectionType> get runtimeCapabilities {
-    // For now, mirrors capabilities. Future: query OS radio state.
     return capabilities;
   }
 
@@ -91,6 +95,14 @@ class ThermalPrinterRs {
     if (!_rustInitialized) {
       await RustLib.init();
       _rustInitialized = true;
+    }
+  }
+
+  /// Ensures Rust is ready and shuts down any prior session before re-init.
+  static Future<void> _prepareInit() async {
+    await _ensureRustInit();
+    if (rust.isPrinterReady()) {
+      await disconnect();
     }
   }
 
@@ -109,7 +121,7 @@ class ThermalPrinterRs {
     int paperWidth = 48,
     int maxRetries = 3,
   }) async {
-    await _ensureRustInit();
+    await _prepareInit();
     if (!Platform.isAndroid && !Platform.isIOS) {
       await PrinterPermissions.request(TransportType.tcp);
     }
@@ -142,7 +154,7 @@ class ThermalPrinterRs {
     int timeoutMs = 3000,
     int paperWidth = 48,
   }) async {
-    await _ensureRustInit();
+    await _prepareInit();
     await PrinterPermissions.request(TransportType.usb);
     await rust.initPrinter(
       config: rust.PrinterConfigDto(
@@ -172,7 +184,7 @@ class ThermalPrinterRs {
     int paperWidth = 48,
     int maxRetries = 2,
   }) async {
-    await _ensureRustInit();
+    await _prepareInit();
     await PrinterPermissions.request(TransportType.bluetooth);
     await rust.initPrinter(
       config: rust.PrinterConfigDto(
@@ -403,7 +415,7 @@ class ThermalPrinterRs {
           bytes: bytes,
           timeoutMs: BigInt.from(1500),
         );
-        return Uint8List.fromList(result);
+        return Uint8List.fromList(result); // FRB returns growable List<int>
       },
     );
   }
@@ -422,12 +434,12 @@ class ThermalPrinterRs {
     PrinterAlign align, {
     PaperSize paperSize = PaperSize.mm80,
   }) {
-    final ticket = TicketBuilder(paperSize: paperSize)
-      ..text(
+    return writeTicket((ticket) {
+      ticket.text(
         message,
         styles: PosStyles(height: size, align: align),
       );
-    return writeBytes(ticket.build());
+    }, paperSize: paperSize);
   }
 
   /// Prints styled text.
@@ -444,8 +456,8 @@ class ThermalPrinterRs {
     bool underline = false,
     PaperSize paperSize = PaperSize.mm80,
   }) {
-    final ticket = TicketBuilder(paperSize: paperSize)
-      ..text(
+    return writeTicket((ticket) {
+      ticket.text(
         message,
         styles: PosStyles(
           height: size,
@@ -454,7 +466,7 @@ class ThermalPrinterRs {
           underline: underline,
         ),
       );
-    return writeBytes(ticket.build());
+    }, paperSize: paperSize);
   }
 
   /// Prints a QR code.
@@ -463,8 +475,7 @@ class ThermalPrinterRs {
   /// Use [TicketBuilder] instead to batch this command with the rest of your
   /// receipt to avoid multiple FFI crossings and fragmented IO writes.
   static Future<void> printQRcode(String data, {int size = 4}) {
-    final ticket = TicketBuilder()..qrcode(data, size: size);
-    return writeBytes(ticket.build());
+    return writeTicket((ticket) => ticket.qrcode(data, size: size));
   }
 
   /// Prints a barcode. Type codes: 65=UPC-A, 67=EAN13, 68=EAN8, 73=CODE128
@@ -478,9 +489,9 @@ class ThermalPrinterRs {
     int width = 2,
     int height = 100,
   }) {
-    final ticket = TicketBuilder()
-      ..barcode(data, type: type, width: width, height: height);
-    return writeBytes(ticket.build());
+    return writeTicket(
+      (ticket) => ticket.barcode(data, type: type, width: width, height: height),
+    );
   }
 
   /// Performs a paper cut.
@@ -490,7 +501,7 @@ class ThermalPrinterRs {
   /// It is much more efficient to call `ticket.cut()` in your [TicketBuilder]
   /// before sending the final byte payload.
   static Future<void> paperCut() {
-    return writeBytes((TicketBuilder()..cut()).build());
+    return writeTicket((ticket) => ticket.cut());
   }
 
   /// Opens the cash drawer (pin 2).
@@ -498,7 +509,7 @@ class ThermalPrinterRs {
   /// **PERFORMANCE WARNING:**
   /// Use [TicketBuilder.openDrawer] instead if this is part of a larger job.
   static Future<void> drawerPin2() {
-    return writeBytes((TicketBuilder()..openDrawer()).build());
+    return writeTicket((ticket) => ticket.openDrawer());
   }
 
   /// Opens the cash drawer (pin 5).
@@ -506,7 +517,7 @@ class ThermalPrinterRs {
   /// **PERFORMANCE WARNING:**
   /// Use [TicketBuilder.openDrawerPin5] instead if this is part of a larger job.
   static Future<void> drawerPin5() {
-    return writeBytes((TicketBuilder()..openDrawerPin5()).build());
+    return writeTicket((ticket) => ticket.openDrawerPin5());
   }
 
   /// Prints a new blank line.
@@ -527,16 +538,53 @@ class ThermalPrinterRs {
 
   // ── Observability ────────────────────────────────────────────────
 
-  static Stream<rust.PrinterStateDto>? _stateStream;
+  static StreamController<rust.PrinterStateDto>? _stateController;
+  static StreamSubscription<rust.PrinterStateDto>? _stateSubscription;
 
   /// A reactive stream of the background worker's state.
   ///
   /// Emits transitions: Disconnected -> Connecting -> Connected -> Printing -> Idle
   /// Use this to update your UI (e.g., showing a loading spinner while connecting).
+  /// Cancel your subscription in [State.dispose] or call [disconnect].
   static Stream<rust.PrinterStateDto> get stateStream {
     _checkInit();
-    _stateStream ??= rust.createStateStream().asBroadcastStream();
-    return _stateStream!;
+    _ensureStateStream();
+    return _stateController!.stream;
+  }
+
+  static void _ensureStateStream() {
+    if (_stateController != null && !_stateController!.isClosed) {
+      return;
+    }
+
+    _stateController = StreamController<rust.PrinterStateDto>.broadcast();
+    _stateSubscription = rust.createStateStream().listen(
+      (state) {
+        final controller = _stateController;
+        if (controller != null && !controller.isClosed) {
+          controller.add(state);
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        final controller = _stateController;
+        if (controller != null && !controller.isClosed) {
+          controller.addError(error, stackTrace);
+        }
+      },
+      onDone: () {
+        unawaited(_closeStateStream());
+      },
+    );
+  }
+
+  static Future<void> _closeStateStream() async {
+    await _stateSubscription?.cancel();
+    _stateSubscription = null;
+    final controller = _stateController;
+    if (controller != null && !controller.isClosed) {
+      await controller.close();
+    }
+    _stateController = null;
   }
 
   /// Clears all pending jobs in the queue.
@@ -572,8 +620,33 @@ class ThermalPrinterRs {
 
   /// Disconnects the transport and releases all resources.
   static Future<void> disconnect() async {
-    await rust.disconnectPrinter();
-    _stateStream = null;
+    await _closeStateStream();
+    if (_rustInitialized && rust.isPrinterReady()) {
+      await rust.disconnectPrinter();
+    }
+  }
+
+  /// Tears down the Rust runtime and releases all plugin resources.
+  ///
+  /// Call when the printer subsystem is no longer needed (e.g. app logout).
+  /// After [dispose], call an `init*` method again before printing.
+  static Future<void> dispose() async {
+    await disconnect();
+    if (_rustInitialized) {
+      RustLib.dispose();
+      _rustInitialized = false;
+      _cachedCapabilities = null;
+    }
+  }
+
+  /// Builds a [TicketBuilder], sends it in a single FFI crossing.
+  static Future<void> writeTicket(
+    void Function(TicketBuilder ticket) build, {
+    PaperSize paperSize = PaperSize.mm80,
+  }) async {
+    final ticket = TicketBuilder(paperSize: paperSize);
+    build(ticket);
+    await writeBytes(ticket.build());
   }
 
   /// Whether the service is initialized (not necessarily connected).
@@ -583,18 +656,17 @@ class ThermalPrinterRs {
   }
 
   /// Whether the transport is currently connected.
-  /// Uses the last known state from [stateStream].
+  ///
+  /// Reads the live worker state from Rust. For reactive updates, listen to
+  /// [stateStream] and cancel the subscription when done.
   static bool get isConnected {
-    if (!_rustInitialized) return false;
-    return _lastKnownState == rust.PrinterStateDto.connected ||
-        _lastKnownState == rust.PrinterStateDto.printing;
+    if (!_rustInitialized || !rust.isPrinterReady()) return false;
+    final state = rust.getPrinterState();
+    return state == rust.PrinterStateDto.connected ||
+        state == rust.PrinterStateDto.printing;
   }
 
   // ── Private helpers ─────────────────────────────────────────────
-
-  // ignore: prefer_final_fields
-  static rust.PrinterStateDto _lastKnownState =
-      rust.PrinterStateDto.disconnected;
 
   static void _checkInit() {
     if (!_rustInitialized) {
