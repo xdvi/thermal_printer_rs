@@ -2,29 +2,29 @@
 // transport/tcp.rs — TCP/IP implementation
 // ============================================================
 use async_trait::async_trait;
-use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
 use tracing::{debug, error, info, warn};
 
-use crate::errors::{PrinterError, Result};
 use super::Transport;
+use crate::errors::{PrinterError, Result};
 
 pub struct TcpTransport {
-    host:       String,
-    port:       u16,
-    timeout:    Duration,
-    stream:     Option<TcpStream>,
+    host: String,
+    port: u16,
+    timeout: Duration,
+    stream: Option<TcpStream>,
     max_retries: u8,
 }
 
 impl TcpTransport {
     pub fn new(host: impl Into<String>, port: u16, timeout_ms: u64, max_retries: u8) -> Self {
         Self {
-            host:        host.into(),
+            host: host.into(),
             port,
-            timeout:     Duration::from_millis(timeout_ms),
-            stream:      None,
+            timeout: Duration::from_millis(timeout_ms),
+            stream: None,
             max_retries,
         }
     }

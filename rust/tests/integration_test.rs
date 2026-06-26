@@ -17,15 +17,16 @@ use thermal_printer_rs::transport::mock::{MockConfig, MockTransport};
 // Helper: creates a PrintService wired to a MockTransport.
 // Returns (service, captured_buffer).
 fn make_mock_service(config: MockConfig) -> (PrintService, Arc<Mutex<Vec<u8>>>) {
-    let buffer    = Arc::new(Mutex::new(Vec::new()));
-    let transport = Box::new(
-        MockTransport::new_with_buffer(buffer.clone()).with_config(config),
-    );
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let transport = Box::new(MockTransport::new_with_buffer(buffer.clone()).with_config(config));
     let printer_config = PrinterConfig {
-        transport:   TransportKind::Tcp { host: "127.0.0.1".into(), port: 9100 },
-        timeout_ms:  1000,
+        transport: TransportKind::Tcp {
+            host: "127.0.0.1".into(),
+            port: 9100,
+        },
+        timeout_ms: 1000,
         paper_width: 48,
-        encoding:    CharEncoding::default(),
+        encoding: CharEncoding::default(),
         max_retries: 0,
     };
     let service = PrintService::new_with_transport(printer_config, transport);
@@ -47,7 +48,10 @@ fn test_service_connect_and_disconnect() {
     rt().block_on(async {
         let (service, _buf) = make_mock_service(MockConfig::default());
         service.connect().await.expect("Connect should succeed");
-        service.disconnect().await.expect("Disconnect should succeed");
+        service
+            .disconnect()
+            .await
+            .expect("Disconnect should succeed");
     });
 }
 
@@ -59,7 +63,10 @@ fn test_connect_fails_when_configured_to_fail() {
             ..Default::default()
         });
         let result = service.connect().await;
-        assert!(result.is_err(), "Connect should fail when configured to fail");
+        assert!(
+            result.is_err(),
+            "Connect should fail when configured to fail"
+        );
     });
 }
 
@@ -103,11 +110,14 @@ fn test_print_text_fails_when_write_fails() {
     rt().block_on(async {
         let (service, _buffer) = make_mock_service(MockConfig {
             starts_connected: true,
-            fail_on_write:    true,
+            fail_on_write: true,
             ..Default::default()
         });
         let result = service.print_text("This should fail").await;
-        assert!(result.is_err(), "Should fail when write is configured to fail");
+        assert!(
+            result.is_err(),
+            "Should fail when write is configured to fail"
+        );
     });
 }
 
@@ -117,10 +127,7 @@ fn test_print_text_fails_when_write_fails() {
 fn test_print_receipt_sends_bytes() {
     rt().block_on(async {
         let (service, buffer) = make_mock_service(MockConfig::default());
-        let lines = [
-            ("Americano Coffee", "$45.00"),
-            ("Mixed Sandwich",   "$89.00"),
-        ];
+        let lines = [("Americano Coffee", "$45.00"), ("Mixed Sandwich", "$89.00")];
         let bytes = service
             .print_receipt("SALE TICKET", &lines, "$134.00", None)
             .await

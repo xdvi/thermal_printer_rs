@@ -46,7 +46,11 @@ impl PrintWorker {
         receiver: mpsc::Receiver<PrintCommand>,
         state_tx: tokio::sync::watch::Sender<WorkerState>,
     ) -> Self {
-        Self { service, receiver, state_tx }
+        Self {
+            service,
+            receiver,
+            state_tx,
+        }
     }
 
     fn set_state(&self, state: WorkerState) {

@@ -6,12 +6,12 @@
 // Configurable to simulate connection failures, timeouts, etc.
 // ============================================================
 
-use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
+use std::sync::{Arc, Mutex};
 use tracing::{debug, info, warn};
 
-use crate::errors::{PrinterError, Result};
 use super::Transport;
+use crate::errors::{PrinterError, Result};
 
 /// Behavior the mock transport should simulate.
 #[derive(Debug, Clone, Default)]
@@ -37,10 +37,10 @@ pub struct MockConfig {
 /// assert!(!received.is_empty());
 /// ```
 pub struct MockTransport {
-    config:    MockConfig,
+    config: MockConfig,
     connected: bool,
     /// Shared buffer where written bytes are captured.
-    buffer:    Arc<Mutex<Vec<u8>>>,
+    buffer: Arc<Mutex<Vec<u8>>>,
     /// Simulated data to return on read().
     read_data: Vec<u8>,
 }
@@ -49,9 +49,9 @@ impl MockTransport {
     /// Creates a mock transport with default (success) behavior.
     pub fn new() -> Self {
         Self {
-            config:    MockConfig::default(),
+            config: MockConfig::default(),
             connected: false,
-            buffer:    Arc::new(Mutex::new(Vec::new())),
+            buffer: Arc::new(Mutex::new(Vec::new())),
             read_data: vec![],
         }
     }
@@ -59,7 +59,7 @@ impl MockTransport {
     /// Creates a mock transport that shares an external buffer for inspection.
     pub fn new_with_buffer(buffer: Arc<Mutex<Vec<u8>>>) -> Self {
         Self {
-            config:    MockConfig::default(),
+            config: MockConfig::default(),
             connected: false,
             buffer,
             read_data: vec![],
@@ -122,7 +122,11 @@ impl Transport for MockTransport {
                 "Simulated write failure (MockTransport)".into(),
             ));
         }
-        debug!(bytes = data.len(), "MockTransport: capturing {} bytes", data.len());
+        debug!(
+            bytes = data.len(),
+            "MockTransport: capturing {} bytes",
+            data.len()
+        );
         self.buffer.lock().unwrap().extend_from_slice(data);
         Ok(())
     }
@@ -170,8 +174,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_fail_on_connect() {
-        let mut transport = MockTransport::new()
-            .with_config(MockConfig { fail_on_connect: true, ..Default::default() });
+        let mut transport = MockTransport::new().with_config(MockConfig {
+            fail_on_connect: true,
+            ..Default::default()
+        });
         let result = transport.connect().await;
         assert!(result.is_err());
         assert!(!transport.is_connected());
@@ -179,12 +185,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_fail_on_write() {
-        let mut transport = MockTransport::new()
-            .with_config(MockConfig {
-                fail_on_write:    true,
-                starts_connected: true,
-                ..Default::default()
-            });
+        let mut transport = MockTransport::new().with_config(MockConfig {
+            fail_on_write: true,
+            starts_connected: true,
+            ..Default::default()
+        });
         let result = transport.write(b"data").await;
         assert!(result.is_err());
         assert!(transport.written_bytes().is_empty());

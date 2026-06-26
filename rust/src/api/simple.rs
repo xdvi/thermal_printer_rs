@@ -13,14 +13,13 @@ use tracing::info;
 use crate::{
     config::{CharEncoding, PrinterConfig, TransportKind},
     errors::PrinterError,
-    printer::PrintService,
     jobs::{PrintCommand, PrintWorker},
+    printer::PrintService,
 };
 use tokio::sync::mpsc;
 
 // ── Thread-safe service singleton ───────────────────────────
-static SERVICE: Lazy<Mutex<Option<Arc<PrintService>>>> =
-    Lazy::new(|| Mutex::new(None));
+static SERVICE: Lazy<Mutex<Option<Arc<PrintService>>>> = Lazy::new(|| Mutex::new(None));
 
 // ── Background job channel ──────────────────────────────────────
 static COMMAND_SENDER: Lazy<Mutex<Option<mpsc::Sender<PrintCommand>>>> =
@@ -43,13 +42,13 @@ pub enum TransportTypeDto {
 #[frb]
 #[derive(Debug, Clone)]
 pub struct PrinterConfigDto {
-    pub transport:   TransportTypeDto,
-    pub host:        Option<String>,
-    pub port:        Option<u16>,
-    pub vendor_id:   Option<u16>,
-    pub product_id:  Option<u16>,
+    pub transport: TransportTypeDto,
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub vendor_id: Option<u16>,
+    pub product_id: Option<u16>,
     pub ble_address: Option<String>,
-    pub timeout_ms:  u64,
+    pub timeout_ms: u64,
     pub paper_width: u8,
     pub max_retries: u8,
 }
@@ -57,13 +56,13 @@ pub struct PrinterConfigDto {
 impl Default for PrinterConfigDto {
     fn default() -> Self {
         Self {
-            transport:   TransportTypeDto::Tcp,
-            host:        Some("192.168.1.100".into()),
-            port:        Some(9100),
-            vendor_id:   None,
-            product_id:  None,
+            transport: TransportTypeDto::Tcp,
+            host: Some("192.168.1.100".into()),
+            port: Some(9100),
+            vendor_id: None,
+            product_id: None,
             ble_address: None,
-            timeout_ms:  5000,
+            timeout_ms: 5000,
             paper_width: 48,
             max_retries: 3,
         }
@@ -74,17 +73,25 @@ impl Default for PrinterConfigDto {
 #[frb]
 #[derive(Debug, Clone)]
 pub struct PrintResultDto {
-    pub success:       bool,
-    pub bytes_sent:    u32,
+    pub success: bool,
+    pub bytes_sent: u32,
     pub error_message: Option<String>,
 }
 
 impl PrintResultDto {
     fn ok(bytes: usize) -> Self {
-        Self { success: true, bytes_sent: bytes as u32, error_message: None }
+        Self {
+            success: true,
+            bytes_sent: bytes as u32,
+            error_message: None,
+        }
     }
     fn err(msg: impl ToString) -> Self {
-        Self { success: false, bytes_sent: 0, error_message: Some(msg.to_string()) }
+        Self {
+            success: false,
+            bytes_sent: 0,
+            error_message: Some(msg.to_string()),
+        }
     }
 }
 
@@ -115,10 +122,10 @@ impl From<crate::jobs::WorkerState> for PrinterStateDto {
     fn from(state: crate::jobs::WorkerState) -> Self {
         match state {
             crate::jobs::WorkerState::Disconnected => Self::Disconnected,
-            crate::jobs::WorkerState::Connecting   => Self::Connecting,
-            crate::jobs::WorkerState::Connected    => Self::Connected,
-            crate::jobs::WorkerState::Printing     => Self::Printing,
-            crate::jobs::WorkerState::Error        => Self::Error,
+            crate::jobs::WorkerState::Connecting => Self::Connecting,
+            crate::jobs::WorkerState::Connected => Self::Connected,
+            crate::jobs::WorkerState::Printing => Self::Printing,
+            crate::jobs::WorkerState::Error => Self::Error,
         }
     }
 }
@@ -145,11 +152,17 @@ pub fn get_printer_state() -> PrinterStateDto {
 /// `frb_generated` module. FRB codegen constructs this type and passes
 /// it here automatically — do not call this function from Dart directly.
 pub fn create_state_stream(
-    sink: crate::frb_generated::StreamSink<PrinterStateDto, flutter_rust_bridge::for_generated::SseCodec>,
+    sink: crate::frb_generated::StreamSink<
+        PrinterStateDto,
+        flutter_rust_bridge::for_generated::SseCodec,
+    >,
 ) -> Result<(), String> {
     let rx = {
         let guard = STATE_RECEIVER.lock();
-        guard.as_ref().cloned().ok_or("PrintService not initialized")?
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or("PrintService not initialized")?
     };
 
     tokio::spawn(async move {
@@ -171,17 +184,17 @@ pub async fn init_printer(config: PrinterConfigDto) -> Result<(), String> {
     let printer_config = build_config(config).map_err(|e| e.to_string())?;
     let service = PrintService::new(printer_config).map_err(|e| e.to_string())?;
     let service_arc = Arc::new(service);
-    
+
     let (tx, rx) = mpsc::channel(1024);
     let (state_tx, state_rx) = tokio::sync::watch::channel(crate::jobs::WorkerState::Disconnected);
-    
+
     let worker = PrintWorker::new(service_arc.clone(), rx, state_tx);
     tokio::spawn(worker.run());
-    
+
     *SERVICE.lock() = Some(service_arc);
     *COMMAND_SENDER.lock() = Some(tx);
     *STATE_RECEIVER.lock() = Some(state_rx);
-    
+
     info!("PrintService initialized (Phase 1 IO task active, Phase 5 State tracking active)");
     Ok(())
 }
@@ -190,9 +203,14 @@ pub async fn init_printer(config: PrinterConfigDto) -> Result<(), String> {
 pub async fn connect_printer() -> Result<(), String> {
     let tx = {
         let guard = COMMAND_SENDER.lock();
-        guard.as_ref().cloned().ok_or("PrintService not initialized")?
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or("PrintService not initialized")?
     };
-    tx.send(PrintCommand::Connect).await.map_err(|e| e.to_string())
+    tx.send(PrintCommand::Connect)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Prints simple text.
@@ -204,18 +222,18 @@ pub async fn print_text(text: String) -> PrintResultDto {
             None => return PrintResultDto::err("PrintService not initialized"),
         }
     };
-    
+
     match service.print_text(&text).await {
-        Ok(n)  => PrintResultDto::ok(n),
+        Ok(n) => PrintResultDto::ok(n),
         Err(e) => PrintResultDto::err(e),
     }
 }
 
 /// Prints a complete receipt.
 pub async fn print_receipt(
-    title:   String,
-    lines:   Vec<ReceiptLineDto>,
-    total:   String,
+    title: String,
+    lines: Vec<ReceiptLineDto>,
+    total: String,
     qr_data: Option<String>,
 ) -> PrintResultDto {
     let service = {
@@ -226,12 +244,16 @@ pub async fn print_receipt(
         }
     };
 
-    let pairs: Vec<(&str, &str)> = lines.iter()
+    let pairs: Vec<(&str, &str)> = lines
+        .iter()
         .map(|l| (l.label.as_str(), l.value.as_str()))
         .collect();
 
-    match service.print_receipt(&title, &pairs, &total, qr_data.as_deref()).await {
-        Ok(n)  => PrintResultDto::ok(n),
+    match service
+        .print_receipt(&title, &pairs, &total, qr_data.as_deref())
+        .await
+    {
+        Ok(n) => PrintResultDto::ok(n),
         Err(e) => PrintResultDto::err(e),
     }
 }
@@ -242,7 +264,7 @@ pub async fn disconnect_printer() -> Result<(), String> {
     if let Some(sender) = tx {
         let _ = sender.send(PrintCommand::Disconnect).await;
     }
-    
+
     let maybe_service = SERVICE.lock().take();
     if let Some(service) = maybe_service {
         service.disconnect().await.map_err(|e| e.to_string())?;
@@ -257,7 +279,8 @@ pub async fn clear_print_queue() -> Result<(), String> {
         let guard = COMMAND_SENDER.lock();
         guard.as_ref().cloned().ok_or("Worker not running")?
     };
-    tx.send(PrintCommand::ClearQueue).await
+    tx.send(PrintCommand::ClearQueue)
+        .await
         .map_err(|e| format!("Failed to send clear command: {}", e))?;
     Ok(())
 }
@@ -270,9 +293,14 @@ pub async fn clear_print_queue() -> Result<(), String> {
 pub async fn write_raw_bytes(bytes: Vec<u8>) -> Result<(), String> {
     let service = {
         let guard = SERVICE.lock();
-        guard.as_ref().cloned().ok_or("PrintService not initialized")?
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or("PrintService not initialized")?
     };
-    service.send_buffer_owned_retrying(bytes).await
+    service
+        .send_buffer_owned_retrying(bytes)
+        .await
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
@@ -282,9 +310,14 @@ pub async fn write_raw_bytes(bytes: Vec<u8>) -> Result<(), String> {
 pub async fn read_raw_bytes(bytes: u32, timeout_ms: u64) -> Result<Vec<u8>, String> {
     let service = {
         let guard = SERVICE.lock();
-        guard.as_ref().cloned().ok_or("PrintService not initialized")?
+        guard
+            .as_ref()
+            .cloned()
+            .ok_or("PrintService not initialized")?
     };
-    service.read(bytes as usize, timeout_ms).await
+    service
+        .read(bytes as usize, timeout_ms)
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -296,8 +329,10 @@ pub async fn read_raw_bytes(bytes: u32, timeout_ms: u64) -> Result<Vec<u8>, Stri
 /// Use [write_raw_bytes] if you need confirmed delivery.
 pub fn enqueue_write_bytes(bytes: Vec<u8>) -> Result<(), String> {
     let sender_guard = COMMAND_SENDER.lock();
-    let tx = sender_guard.as_ref().ok_or("Background worker not running")?;
-    
+    let tx = sender_guard
+        .as_ref()
+        .ok_or("Background worker not running")?;
+
     tx.try_send(PrintCommand::Print(bytes))
         .map_err(|e| format!("Failed to enqueue: {}", e))?;
     Ok(())
@@ -308,29 +343,33 @@ pub fn enqueue_print_text(text: String) -> Result<(), String> {
     let guard = SERVICE.lock();
     let svc = guard.as_ref().ok_or("PrintService not initialized")?;
     let buf = svc.adapter().build_text(&text).map_err(|e| e.to_string())?;
-    
+
     enqueue_write_bytes(buf)
 }
 
 /// Enqueues a receipt print job (non-blocking).
 pub fn enqueue_print_receipt(
-    title:   String,
-    lines:   Vec<ReceiptLineDto>,
-    total:   String,
+    title: String,
+    lines: Vec<ReceiptLineDto>,
+    total: String,
     qr_data: Option<String>,
 ) -> Result<(), String> {
     let guard = SERVICE.lock();
     let svc = guard.as_ref().ok_or("PrintService not initialized")?;
-    
+
     let receipt_lines: Vec<crate::escpos_adapter::ReceiptLine> = lines
         .into_iter()
-        .map(|l| crate::escpos_adapter::ReceiptLine { label: l.label, value: l.value })
+        .map(|l| crate::escpos_adapter::ReceiptLine {
+            label: l.label,
+            value: l.value,
+        })
         .collect();
-        
-    let buf = svc.adapter()
+
+    let buf = svc
+        .adapter()
         .build_receipt(&title, &receipt_lines, &total, qr_data.as_deref())
         .map_err(|e| e.to_string())?;
-        
+
     enqueue_write_bytes(buf)
 }
 
@@ -342,11 +381,9 @@ pub fn enqueue_print_receipt(
 ///
 /// Returns the complete ESC/POS byte sequence, ready to send to the printer.
 pub async fn encode_raster_image(rgba: Vec<u8>, width: i64, height: i64) -> Vec<u8> {
-    tokio::task::spawn_blocking(move || {
-        _dither_and_encode(&rgba, width as usize, height as usize)
-    })
-    .await
-    .unwrap_or_default()
+    tokio::task::spawn_blocking(move || _dither_and_encode(&rgba, width as usize, height as usize))
+        .await
+        .unwrap_or_default()
 }
 
 // ── Raster image internals (not exposed to Dart) ─────────────────────────
@@ -359,15 +396,15 @@ fn _dither_and_encode(rgba: &[u8], width: usize, height: usize) -> Vec<u8> {
     // All integer math: avoids FPU setup cost per pixel.
     for (i, gray_val) in gray.iter_mut().enumerate().take(n) {
         let b = i * 4;
-        let r  = rgba[b]     as i32;
-        let g  = rgba[b + 1] as i32;
+        let r = rgba[b] as i32;
+        let g = rgba[b + 1] as i32;
         let bv = rgba[b + 2] as i32;
-        let a  = rgba[b + 3] as i32;
+        let a = rgba[b + 3] as i32;
         let ia = 255 - a;
 
         // Blend over white: channel_out = (channel * a + 255 * (255-a)) / 255
-        let br = (r  * a + 255 * ia + 127) / 255;
-        let bg = (g  * a + 255 * ia + 127) / 255;
+        let br = (r * a + 255 * ia + 127) / 255;
+        let bg = (g * a + 255 * ia + 127) / 255;
         let bb = (bv * a + 255 * ia + 127) / 255;
 
         // Luminosity weights (BT.601, integer approximation × 1000)
@@ -383,7 +420,9 @@ fn _dither_and_encode(rgba: &[u8], width: usize, height: usize) -> Vec<u8> {
             let neo = if old < 128 { 0i32 } else { 255i32 };
             gray[idx] = neo;
             let err = old - neo;
-            if err == 0 { continue; }
+            if err == 0 {
+                continue;
+            }
 
             if x + 1 < width {
                 let i = idx + 1;
@@ -449,25 +488,39 @@ pub fn is_printer_ready() -> bool {
 fn build_config(dto: PrinterConfigDto) -> crate::errors::Result<PrinterConfig> {
     let transport = match dto.transport {
         TransportTypeDto::Tcp => {
-            let host = dto.host.ok_or_else(|| PrinterError::InvalidConfig("TCP requires 'host'".into()))?;
-            TransportKind::Tcp { host, port: dto.port.unwrap_or(9100) }
+            let host = dto
+                .host
+                .ok_or_else(|| PrinterError::InvalidConfig("TCP requires 'host'".into()))?;
+            TransportKind::Tcp {
+                host,
+                port: dto.port.unwrap_or(9100),
+            }
         }
         TransportTypeDto::Usb => {
-            let vid = dto.vendor_id.ok_or_else(|| PrinterError::InvalidConfig("USB requires 'vendor_id'".into()))?;
-            let pid = dto.product_id.ok_or_else(|| PrinterError::InvalidConfig("USB requires 'product_id'".into()))?;
-            TransportKind::Usb { vendor_id: vid, product_id: pid }
+            let vid = dto
+                .vendor_id
+                .ok_or_else(|| PrinterError::InvalidConfig("USB requires 'vendor_id'".into()))?;
+            let pid = dto
+                .product_id
+                .ok_or_else(|| PrinterError::InvalidConfig("USB requires 'product_id'".into()))?;
+            TransportKind::Usb {
+                vendor_id: vid,
+                product_id: pid,
+            }
         }
         TransportTypeDto::Bluetooth => {
-            let addr = dto.ble_address.ok_or_else(|| PrinterError::InvalidConfig("BLE requires 'ble_address'".into()))?;
+            let addr = dto
+                .ble_address
+                .ok_or_else(|| PrinterError::InvalidConfig("BLE requires 'ble_address'".into()))?;
             TransportKind::Ble { address: addr }
         }
     };
 
     Ok(PrinterConfig {
         transport,
-        timeout_ms:  dto.timeout_ms,
+        timeout_ms: dto.timeout_ms,
         paper_width: dto.paper_width,
-        encoding:    CharEncoding::default(),
+        encoding: CharEncoding::default(),
         max_retries: dto.max_retries,
     })
 }

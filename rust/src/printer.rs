@@ -6,7 +6,7 @@
 // ============================================================
 
 use tokio::sync::{mpsc, oneshot};
-use tracing::{error, info, warn, instrument};
+use tracing::{error, info, instrument, warn};
 
 use crate::{
     config::{PrinterConfig, TransportKind},
@@ -24,51 +24,54 @@ use crate::transport::ble::BleTransport;
 // ── IO Commands ──────────────────────────────────────────────────
 
 enum IoCommand {
-    Connect { 
-        resp: oneshot::Sender<Result<()>> 
+    Connect {
+        resp: oneshot::Sender<Result<()>>,
     },
-    Write { 
-        data: Vec<u8>, 
-        resp: oneshot::Sender<Result<usize>> 
+    Write {
+        data: Vec<u8>,
+        resp: oneshot::Sender<Result<usize>>,
     },
     Read {
         bytes: usize,
         timeout_ms: u64,
-        resp: oneshot::Sender<Result<Vec<u8>>>
+        resp: oneshot::Sender<Result<Vec<u8>>>,
     },
-    IsConnected { 
-        resp: oneshot::Sender<bool> 
+    IsConnected {
+        resp: oneshot::Sender<bool>,
     },
-    Disconnect { 
-        resp: oneshot::Sender<Result<()>> 
+    Disconnect {
+        resp: oneshot::Sender<Result<()>>,
     },
 }
 
 // ── PrintService ─────────────────────────────────────────────────
 
 pub struct PrintService {
-    cmd_tx:  mpsc::Sender<IoCommand>,
+    cmd_tx: mpsc::Sender<IoCommand>,
     adapter: EscposAdapter,
-    config:  PrinterConfig,
+    config: PrinterConfig,
 }
 
 impl PrintService {
     /// Creates a PrintService from configuration and spawns the IO task.
     pub fn new(config: PrinterConfig) -> Result<Self> {
         let transport: Box<dyn Transport> = match &config.transport {
-            TransportKind::Tcp { host, port } => {
-                Box::new(TcpTransport::new(
-                    host.clone(),
-                    *port,
-                    config.timeout_ms,
-                    config.max_retries,
-                ))
-            }
+            TransportKind::Tcp { host, port } => Box::new(TcpTransport::new(
+                host.clone(),
+                *port,
+                config.timeout_ms,
+                config.max_retries,
+            )),
 
             #[cfg(feature = "usb")]
-            TransportKind::Usb { vendor_id, product_id } => {
-                Box::new(UsbTransport::new(*vendor_id, *product_id, config.timeout_ms))
-            }
+            TransportKind::Usb {
+                vendor_id,
+                product_id,
+            } => Box::new(UsbTransport::new(
+                *vendor_id,
+                *product_id,
+                config.timeout_ms,
+            )),
 
             #[cfg(feature = "ble")]
             TransportKind::Ble { address } => {
@@ -81,7 +84,7 @@ impl PrintService {
 
         let (cmd_tx, cmd_rx) = mpsc::channel(100);
         let paper_width = config.paper_width;
-        
+
         // Spawn the owner task for the transport
         tokio::spawn(io_task(transport, cmd_rx));
 
@@ -96,7 +99,7 @@ impl PrintService {
     pub fn new_with_transport(config: PrinterConfig, transport: Box<dyn Transport>) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel(100);
         let paper_width = config.paper_width;
-        
+
         tokio::spawn(io_task(transport, cmd_rx));
 
         Self {
@@ -110,10 +113,13 @@ impl PrintService {
     #[instrument(skip(self))]
     pub async fn connect(&self) -> Result<()> {
         let (tx, rx) = oneshot::channel();
-        self.cmd_tx.send(IoCommand::Connect { resp: tx }).await
+        self.cmd_tx
+            .send(IoCommand::Connect { resp: tx })
+            .await
             .map_err(|_| PrinterError::ConnectionFailed("IO task dropped".into()))?;
-        
-        rx.await.map_err(|_| PrinterError::ConnectionFailed("IO task panicked".into()))?
+
+        rx.await
+            .map_err(|_| PrinterError::ConnectionFailed("IO task panicked".into()))?
     }
 
     /// Prints simple text with paper cut.
@@ -134,9 +140,14 @@ impl PrintService {
         self.ensure_connected().await?;
         let receipt_lines: Vec<ReceiptLine> = lines
             .iter()
-            .map(|(l, v)| ReceiptLine { label: l.to_string(), value: v.to_string() })
+            .map(|(l, v)| ReceiptLine {
+                label: l.to_string(),
+                value: v.to_string(),
+            })
             .collect();
-        let buf = self.adapter.build_receipt(title, &receipt_lines, total, qr_data)?;
+        let buf = self
+            .adapter
+            .build_receipt(title, &receipt_lines, total, qr_data)?;
         self.send_buffer_owned(buf).await
     }
 
@@ -144,16 +155,24 @@ impl PrintService {
     pub async fn disconnect(&self) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         let _ = self.cmd_tx.send(IoCommand::Disconnect { resp: tx }).await;
-        rx.await.map_err(|_| PrinterError::ConnectionFailed("IO task panicked".into()))?
+        rx.await
+            .map_err(|_| PrinterError::ConnectionFailed("IO task panicked".into()))?
     }
 
     /// Reads bytes from the transport.
     pub async fn read(&self, bytes: usize, timeout_ms: u64) -> Result<Vec<u8>> {
         self.ensure_connected().await?;
         let (tx, rx) = oneshot::channel();
-        self.cmd_tx.send(IoCommand::Read { bytes, timeout_ms, resp: tx }).await
+        self.cmd_tx
+            .send(IoCommand::Read {
+                bytes,
+                timeout_ms,
+                resp: tx,
+            })
+            .await
             .map_err(|_| PrinterError::ConnectionFailed("IO task dropped".into()))?;
-        rx.await.map_err(|_| PrinterError::ConnectionFailed("IO task panicked".into()))?
+        rx.await
+            .map_err(|_| PrinterError::ConnectionFailed("IO task panicked".into()))?
     }
 
     /// Sends an owned buffer with automatic reconnection and retries.
@@ -168,7 +187,8 @@ impl PrintService {
                 let mut last_err = e;
 
                 for attempt in 1..=self.config.max_retries {
-                    let backoff = std::time::Duration::from_millis(500 * 2u64.pow(attempt as u32 - 1));
+                    let backoff =
+                        std::time::Duration::from_millis(500 * 2u64.pow(attempt as u32 - 1));
                     warn!(attempt, ?backoff, "Retrying buffer send...");
                     tokio::time::sleep(backoff).await;
 
@@ -198,7 +218,12 @@ impl PrintService {
 
     async fn is_connected(&self) -> bool {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.send(IoCommand::IsConnected { resp: tx }).await.is_err() {
+        if self
+            .cmd_tx
+            .send(IoCommand::IsConnected { resp: tx })
+            .await
+            .is_err()
+        {
             return false;
         }
         rx.await.unwrap_or(false)
@@ -216,11 +241,17 @@ impl PrintService {
     pub(crate) async fn send_buffer_owned(&self, buf: Vec<u8>) -> Result<usize> {
         let _len = buf.len();
         let (tx, rx) = oneshot::channel();
-        
-        self.cmd_tx.send(IoCommand::Write { data: buf, resp: tx }).await
+
+        self.cmd_tx
+            .send(IoCommand::Write {
+                data: buf,
+                resp: tx,
+            })
+            .await
             .map_err(|_| PrinterError::ConnectionFailed("IO task dropped".into()))?;
-            
-        rx.await.map_err(|_| PrinterError::ConnectionFailed("IO task panicked".into()))?
+
+        rx.await
+            .map_err(|_| PrinterError::ConnectionFailed("IO task panicked".into()))?
     }
 }
 
@@ -228,7 +259,7 @@ impl PrintService {
 
 async fn io_task(mut transport: Box<dyn Transport>, mut cmd_rx: mpsc::Receiver<IoCommand>) {
     info!("IO Task started");
-    
+
     while let Some(cmd) = cmd_rx.recv().await {
         match cmd {
             IoCommand::Connect { resp } => {
@@ -255,7 +286,7 @@ async fn io_task(mut transport: Box<dyn Transport>, mut cmd_rx: mpsc::Receiver<I
                             break;
                         }
                         total_sent += chunk.len();
-                        
+
                         if !delay.is_zero() {
                             tokio::time::sleep(delay).await;
                         } else {
@@ -265,13 +296,19 @@ async fn io_task(mut transport: Box<dyn Transport>, mut cmd_rx: mpsc::Receiver<I
                 }
                 let _ = resp.send(res.map(|_| total_sent));
             }
-            IoCommand::Read { bytes, timeout_ms, resp } => {
+            IoCommand::Read {
+                bytes,
+                timeout_ms,
+                resp,
+            } => {
                 let mut buf = vec![0u8; bytes];
                 // Transport read might not respect timeout natively, so wrap it
                 let read_res = match tokio::time::timeout(
                     std::time::Duration::from_millis(timeout_ms),
-                    transport.read(&mut buf)
-                ).await {
+                    transport.read(&mut buf),
+                )
+                .await
+                {
                     Ok(Ok(n)) => {
                         buf.truncate(n);
                         Ok(buf)
@@ -290,6 +327,6 @@ async fn io_task(mut transport: Box<dyn Transport>, mut cmd_rx: mpsc::Receiver<I
             }
         }
     }
-    
+
     info!("IO Task stopped");
 }

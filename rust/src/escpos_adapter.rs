@@ -9,11 +9,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use escpos::{
-    driver::Driver,
-    errors::Result as EscposResult,
-    printer::Printer,
-    printer_options::PrinterOptions,
-    utils::*,
+    driver::Driver, errors::Result as EscposResult, printer::Printer,
+    printer_options::PrinterOptions, utils::*,
 };
 use tracing::debug;
 
@@ -30,7 +27,9 @@ pub struct MemoryDriver {
 
 impl MemoryDriver {
     pub fn new() -> Self {
-        Self { buffer: Rc::new(RefCell::new(Vec::with_capacity(1024))) }
+        Self {
+            buffer: Rc::new(RefCell::new(Vec::with_capacity(1024))),
+        }
     }
 
     pub fn take_buffer(&self) -> Vec<u8> {
@@ -83,10 +82,10 @@ impl EscposAdapter {
     pub fn build_text(&self, text: &str) -> Result<Vec<u8>> {
         let buf = self.with_printer(|p| {
             p.init()?
-             .justify(JustifyMode::LEFT)?
-             .writeln(text)?
-             .feed()?
-             .print_cut()
+                .justify(JustifyMode::LEFT)?
+                .writeln(text)?
+                .feed()?
+                .print_cut()
         })?;
         debug!(bytes = buf.len(), "Text buffer generated");
         Ok(buf)
@@ -105,14 +104,14 @@ impl EscposAdapter {
         let buf = self.with_printer(|p| {
             // ── Header ────────────────────────────────────────────
             p.init()?
-             .justify(JustifyMode::CENTER)?
-             .bold(true)?
-             .size(1, 1)?
-             .writeln(title)?
-             .bold(false)?
-             .writeln(&sep)?
-             // ── Product lines ──────────────────────────────────
-             .justify(JustifyMode::LEFT)?;
+                .justify(JustifyMode::CENTER)?
+                .bold(true)?
+                .size(1, 1)?
+                .writeln(title)?
+                .bold(false)?
+                .writeln(&sep)?
+                // ── Product lines ──────────────────────────────────
+                .justify(JustifyMode::LEFT)?;
 
             for line in lines {
                 let row = self.format_line(&line.label, &line.value);
@@ -121,21 +120,21 @@ impl EscposAdapter {
 
             // ── Separator and total ────────────────────────────────────
             p.writeln(&sep)?
-             .justify(JustifyMode::RIGHT)?
-             .bold(true)?
-             .writeln(&format!("TOTAL: {}", total))?
-             .bold(false)?
-             .feed()?;
+                .justify(JustifyMode::RIGHT)?
+                .bold(true)?
+                .writeln(&format!("TOTAL: {}", total))?
+                .bold(false)?
+                .feed()?;
 
             // ── Optional QR Code (requires feature codes_2d) ──────────
             #[cfg(feature = "codes_2d")]
             if let Some(qr) = qr_data {
                 p.justify(JustifyMode::CENTER)?
-                 .qrcode_option(
-                     qr,
-                     QRCodeOption::new(QRCodeModel::Model2, 5, QRCodeCorrectionLevel::M),
-                 )?
-                 .feed()?;
+                    .qrcode_option(
+                        qr,
+                        QRCodeOption::new(QRCodeModel::Model2, 5, QRCodeCorrectionLevel::M),
+                    )?
+                    .feed()?;
             }
             #[cfg(not(feature = "codes_2d"))]
             let _ = qr_data;
@@ -152,13 +151,13 @@ impl EscposAdapter {
     pub fn build_qr(&self, data: &str) -> Result<Vec<u8>> {
         self.with_printer(|p| {
             p.init()?
-             .justify(JustifyMode::CENTER)?
-             .qrcode_option(
-                 data,
-                 QRCodeOption::new(QRCodeModel::Model2, 6, QRCodeCorrectionLevel::M),
-             )?
-             .feed()?
-             .print_cut()
+                .justify(JustifyMode::CENTER)?
+                .qrcode_option(
+                    data,
+                    QRCodeOption::new(QRCodeModel::Model2, 6, QRCodeCorrectionLevel::M),
+                )?
+                .feed()?
+                .print_cut()
         })
     }
 
@@ -167,18 +166,18 @@ impl EscposAdapter {
     pub fn build_ean13(&self, data: &str) -> Result<Vec<u8>> {
         self.with_printer(|p| {
             p.init()?
-             .justify(JustifyMode::CENTER)?
-             .ean13_option(
-                 data,
-                 BarcodeOption::new(
-                     BarcodeWidth::M,
-                     BarcodeHeight::M,
-                     BarcodeFont::A,
-                     BarcodePosition::Below,
-                 ),
-             )?
-             .feed()?
-             .print_cut()
+                .justify(JustifyMode::CENTER)?
+                .ean13_option(
+                    data,
+                    BarcodeOption::new(
+                        BarcodeWidth::M,
+                        BarcodeHeight::M,
+                        BarcodeFont::A,
+                        BarcodePosition::Below,
+                    ),
+                )?
+                .feed()?
+                .print_cut()
         })
     }
 
@@ -196,11 +195,8 @@ impl EscposAdapter {
         let driver = MemoryDriver::new();
         let driver_clone = driver.clone(); // shares the Arc<Mutex<Vec<u8>>>
 
-        let mut printer = Printer::new(
-            driver,
-            Protocol::default(),
-            Some(PrinterOptions::default()),
-        );
+        let mut printer =
+            Printer::new(driver, Protocol::default(), Some(PrinterOptions::default()));
 
         f(&mut printer).map_err(|e| PrinterError::EscposError(e.to_string()))?;
 
@@ -248,10 +244,18 @@ mod tests {
     #[test]
     fn test_build_receipt_nonempty() {
         let lines = vec![
-            ReceiptLine { label: "Coffee".into(), value: "$45.00".into() },
-            ReceiptLine { label: "Water".into(), value: "$20.00".into() },
+            ReceiptLine {
+                label: "Coffee".into(),
+                value: "$45.00".into(),
+            },
+            ReceiptLine {
+                label: "Water".into(),
+                value: "$20.00".into(),
+            },
         ];
-        let buf = adapter().build_receipt("TICKET", &lines, "$65.00", None).unwrap();
+        let buf = adapter()
+            .build_receipt("TICKET", &lines, "$65.00", None)
+            .unwrap();
         assert!(!buf.is_empty());
     }
 

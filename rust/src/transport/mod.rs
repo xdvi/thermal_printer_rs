@@ -1,8 +1,8 @@
 // ============================================================
 // transport/mod.rs — Transport trait + re-exports
 // ============================================================
-pub mod tcp;
 pub mod mock;
+pub mod tcp;
 
 #[cfg(feature = "usb")]
 pub mod usb;
@@ -10,8 +10,8 @@ pub mod usb;
 #[cfg(feature = "ble")]
 pub mod ble;
 
-use async_trait::async_trait;
 use crate::errors::Result;
+use async_trait::async_trait;
 
 /// Transport abstraction.
 /// All implementations must be Send + Sync for use in multi-threaded async contexts.

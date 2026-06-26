@@ -14,21 +14,21 @@ use async_trait::async_trait;
 use rusb::{Context, DeviceHandle, UsbContext};
 use tracing::{debug, info, warn};
 
-use crate::errors::{PrinterError, Result};
 use super::Transport;
+use crate::errors::{PrinterError, Result};
 
 /// Typical OUT endpoint for ESC/POS printers.
 /// May vary by model — detect with `lsusb -v` or USBDeview.
 const USB_ENDPOINT_OUT: u8 = 0x01;
-const USB_ENDPOINT_IN:  u8 = 0x81;
-const USB_INTERFACE:    u8 = 0;
+const USB_ENDPOINT_IN: u8 = 0x81;
+const USB_INTERFACE: u8 = 0;
 
 pub struct UsbTransport {
-    vendor_id:  u16,
+    vendor_id: u16,
     product_id: u16,
-    timeout:    std::time::Duration,
-    handle:     Option<DeviceHandle<Context>>,
-    context:    Option<Context>,
+    timeout: std::time::Duration,
+    handle: Option<DeviceHandle<Context>>,
+    context: Option<Context>,
 }
 
 impl UsbTransport {
@@ -36,9 +36,9 @@ impl UsbTransport {
         Self {
             vendor_id,
             product_id,
-            timeout:  std::time::Duration::from_millis(timeout_ms),
-            handle:   None,
-            context:  None,
+            timeout: std::time::Duration::from_millis(timeout_ms),
+            handle: None,
+            context: None,
         }
     }
 }
@@ -61,29 +61,32 @@ impl Transport for UsbTransport {
         // Detach kernel driver if active (Linux)
         match handle.kernel_driver_active(USB_INTERFACE) {
             Ok(true) => {
-                warn!("Kernel driver active on interface {}. Detaching...", USB_INTERFACE);
-                handle.detach_kernel_driver(USB_INTERFACE)
-                    .map_err(|e| PrinterError::PermissionDenied(
-                        format!("Could not detach kernel driver: {e}. Try running as root?")
-                    ))?;
+                warn!(
+                    "Kernel driver active on interface {}. Detaching...",
+                    USB_INTERFACE
+                );
+                handle.detach_kernel_driver(USB_INTERFACE).map_err(|e| {
+                    PrinterError::PermissionDenied(format!(
+                        "Could not detach kernel driver: {e}. Try running as root?"
+                    ))
+                })?;
             }
             Ok(false) => {}
             Err(e) => debug!("kernel_driver_active not supported on this platform: {e}"),
         }
 
-        handle.claim_interface(USB_INTERFACE)
-            .map_err(|e| PrinterError::PermissionDenied(
-                format!("claim_interface failed: {e}")
-            ))?;
+        handle
+            .claim_interface(USB_INTERFACE)
+            .map_err(|e| PrinterError::PermissionDenied(format!("claim_interface failed: {e}")))?;
 
         info!(
-            vendor_id  = format!("{:04x}", self.vendor_id),
+            vendor_id = format!("{:04x}", self.vendor_id),
             product_id = format!("{:04x}", self.product_id),
             "USB connected"
         );
 
         self.context = Some(ctx);
-        self.handle  = Some(handle);
+        self.handle = Some(handle);
         Ok(())
     }
 
@@ -114,7 +117,10 @@ impl Transport for UsbTransport {
     async fn disconnect(&mut self) -> Result<()> {
         if let Some(handle) = self.handle.take() {
             let _ = handle.release_interface(USB_INTERFACE);
-            info!("USB disconnected ({:04x}:{:04x})", self.vendor_id, self.product_id);
+            info!(
+                "USB disconnected ({:04x}:{:04x})",
+                self.vendor_id, self.product_id
+            );
         }
         self.context.take();
         Ok(())

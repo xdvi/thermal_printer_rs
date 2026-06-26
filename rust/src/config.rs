@@ -16,7 +16,7 @@ pub enum TransportKind {
 /// Complete configuration for the print service.
 #[derive(Debug, Clone)]
 pub struct PrinterConfig {
-    pub transport:  TransportKind,
+    pub transport: TransportKind,
     pub timeout_ms: u64,
     /// Paper width in characters (typical: 32 or 48)
     pub paper_width: u8,
@@ -37,10 +37,13 @@ pub enum CharEncoding {
 impl Default for PrinterConfig {
     fn default() -> Self {
         Self {
-            transport:   TransportKind::Tcp { host: "127.0.0.1".into(), port: 9100 },
-            timeout_ms:  5000,
+            transport: TransportKind::Tcp {
+                host: "127.0.0.1".into(),
+                port: 9100,
+            },
+            timeout_ms: 5000,
             paper_width: 48,
-            encoding:    CharEncoding::Pc437,
+            encoding: CharEncoding::Pc437,
             max_retries: 3,
         }
     }
