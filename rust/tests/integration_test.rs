@@ -29,6 +29,8 @@ fn make_mock_service(config: MockConfig) -> (PrintService, Arc<Mutex<Vec<u8>>>) 
         paper_width: 48,
         encoding: CharEncoding::default(),
         max_retries: 0,
+        ble_chunk_size: None,
+        ble_chunk_delay_ms: None,
     };
     let service = PrintService::new_with_transport(
         printer_config,
@@ -223,6 +225,8 @@ fn test_clear_queue_cancels_retry_backoff() {
             paper_width: 48,
             encoding: CharEncoding::default(),
             max_retries: 3,
+            ble_chunk_size: None,
+            ble_chunk_delay_ms: None,
         };
         let service = PrintService::new_with_transport(printer_config, transport, session.clone());
 
@@ -259,6 +263,8 @@ fn test_send_buffer_without_retries_succeeds() {
             paper_width: 48,
             encoding: CharEncoding::default(),
             max_retries: 0,
+            ble_chunk_size: None,
+            ble_chunk_delay_ms: None,
         };
         let service = PrintService::new_with_transport(
             printer_config,

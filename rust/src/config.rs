@@ -24,6 +24,13 @@ pub struct PrinterConfig {
     pub encoding: CharEncoding,
     /// Number of automatic reconnection attempts
     pub max_retries: u8,
+    /// BLE only: override the write chunk size (bytes). `None` keeps the
+    /// conservative 20-byte default. Set to (negotiated MTU - 3) on printers
+    /// known to accept larger writes for a big throughput gain.
+    pub ble_chunk_size: Option<usize>,
+    /// BLE only: override the inter-chunk delay. `None` keeps the 20ms default.
+    /// Set to 0 when the transport's own write backpressure suffices.
+    pub ble_chunk_delay_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -45,6 +52,8 @@ impl Default for PrinterConfig {
             paper_width: 48,
             encoding: CharEncoding::Pc437,
             max_retries: 3,
+            ble_chunk_size: None,
+            ble_chunk_delay_ms: None,
         }
     }
 }

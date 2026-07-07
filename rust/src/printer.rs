@@ -86,7 +86,14 @@ impl PrintService {
 
             #[cfg(feature = "ble")]
             TransportKind::Ble { address } => {
-                Box::new(BleTransport::new(address.clone(), config.timeout_ms))
+                let mut ble = BleTransport::new(address.clone(), config.timeout_ms);
+                if let Some(size) = config.ble_chunk_size {
+                    ble = ble.with_chunk_size(size);
+                }
+                if let Some(ms) = config.ble_chunk_delay_ms {
+                    ble = ble.with_chunk_delay(std::time::Duration::from_millis(ms));
+                }
+                Box::new(ble)
             }
 
             #[allow(unreachable_patterns)]
@@ -373,6 +380,16 @@ async fn io_task(
                 timeout_ms,
                 resp,
             } => {
+                // Cap the allocation: the public API takes bytes: u32, so a
+                // huge value would allocate a huge buffer for nothing. Printer
+                // status replies are tiny (<= ~32 bytes); 8 KiB is generous.
+                const MAX_READ: usize = 8 * 1024;
+                if bytes > MAX_READ {
+                    let _ = resp.send(Err(PrinterError::InvalidConfig(format!(
+                        "read length {bytes} exceeds {MAX_READ}"
+                    ))));
+                    continue;
+                }
                 let mut buf = vec![0u8; bytes];
                 // Transport read might not respect timeout natively, so wrap it
                 let read_res = match tokio::time::timeout(

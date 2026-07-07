@@ -42,6 +42,7 @@ const DEFAULT_PRINT_CHAR_UUID: &str = "00002af1-0000-1000-8000-00805f9b34fb";
 /// validate on real hardware (a too-large chunk silently drops data on the
 /// `WithoutResponse` path).
 const DEFAULT_CHUNK_SIZE: usize = 20;
+const DEFAULT_CHUNK_DELAY_MS: u64 = 20;
 const MAX_SCAN_MS: u64 = 5_000;
 
 pub struct BleTransport {
@@ -50,6 +51,7 @@ pub struct BleTransport {
     char_uuid: Uuid,
     scan_timeout: Duration,
     chunk_size: usize,
+    chunk_delay: Duration,
     peripheral: Option<btleplug::platform::Peripheral>,
     /// Resolved write characteristic, cached once at connect time so each
     /// `write()` does not re-enumerate all characteristics.
@@ -64,9 +66,24 @@ impl BleTransport {
             char_uuid: Uuid::parse_str(DEFAULT_PRINT_CHAR_UUID).unwrap(),
             scan_timeout: Duration::from_millis(timeout_ms),
             chunk_size: DEFAULT_CHUNK_SIZE,
+            chunk_delay: Duration::from_millis(DEFAULT_CHUNK_DELAY_MS),
             peripheral: None,
             characteristic: None,
         }
+    }
+
+    /// Override the write chunk size (bytes). Set to (negotiated MTU - 3) on
+    /// printers known to accept larger writes. Defaults to 20.
+    pub fn with_chunk_size(mut self, size: usize) -> Self {
+        self.chunk_size = size.max(1);
+        self
+    }
+
+    /// Override the inter-chunk delay. Set to zero when the transport's own
+    /// write backpressure is sufficient. Defaults to 20ms.
+    pub fn with_chunk_delay(mut self, delay: Duration) -> Self {
+        self.chunk_delay = delay;
+        self
     }
 
     async fn find_peripheral(
@@ -227,6 +244,33 @@ impl Transport for BleTransport {
     }
 
     fn chunk_delay(&self) -> Duration {
-        Duration::from_millis(20)
+        self.chunk_delay
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_are_conservative() {
+        let ble = BleTransport::new("AA:BB:CC:DD:EE:FF", 1000);
+        assert_eq!(ble.preferred_chunk_size(), 20);
+        assert_eq!(ble.chunk_delay(), Duration::from_millis(20));
+    }
+
+    #[test]
+    fn chunk_size_and_delay_overridable() {
+        let ble = BleTransport::new("AA:BB:CC:DD:EE:FF", 1000)
+            .with_chunk_size(180)
+            .with_chunk_delay(Duration::from_millis(5));
+        assert_eq!(ble.preferred_chunk_size(), 180);
+        assert_eq!(ble.chunk_delay(), Duration::from_millis(5));
+    }
+
+    #[test]
+    fn chunk_size_clamped_to_minimum_1() {
+        let ble = BleTransport::new("x", 1).with_chunk_size(0);
+        assert_eq!(ble.preferred_chunk_size(), 1);
     }
 }
