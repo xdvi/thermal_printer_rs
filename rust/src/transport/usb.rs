@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use nusb::transfer::{Bulk, Out, TransferError};
-use nusb::{Error, ErrorKind};
+use nusb::{Endpoint, Error, ErrorKind};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
@@ -25,6 +25,15 @@ use crate::errors::{PrinterError, Result};
 /// May vary by model — detect with `lsusb -v` or USBDeview.
 const USB_ENDPOINT_OUT: u8 = 0x01;
 const USB_INTERFACE: u8 = 0;
+
+/// Sub-chunk size used for pipelined bulk OUT transfers. Kept well below
+/// common per-URB limits (Linux usbfs default 16-64KB, WinUSB drivers vary)
+/// so a single submit never risks a driver-level rejection.
+const PIPELINE_CHUNK: usize = 16 * 1024;
+/// Number of transfers kept in flight simultaneously. Submitting ahead of
+/// completion is what actually saturates the bus instead of paying one
+/// submit+wait round-trip per chunk.
+const PIPELINE_WINDOW: usize = 4;
 
 fn map_nusb_error_kind(kind: ErrorKind, message: impl ToString) -> PrinterError {
     let message = message.to_string();
@@ -52,6 +61,9 @@ pub struct UsbTransport {
     out_endpoint: u8,
     device: Option<nusb::Device>,
     interface: Option<nusb::Interface>,
+    /// Opened OUT endpoint, cached at connect time so each `write()` reuses
+    /// it instead of re-resolving the descriptor and re-claiming the queue.
+    endpoint: Option<Endpoint<Bulk, Out>>,
     kernel_driver_detached: bool,
 }
 
@@ -70,6 +82,7 @@ impl UsbTransport {
             out_endpoint: USB_ENDPOINT_OUT,
             device: None,
             interface: None,
+            endpoint: None,
             kernel_driver_detached: false,
         }
     }
@@ -79,9 +92,72 @@ impl UsbTransport {
     }
 
     async fn teardown_inflight(&mut self) {
+        self.endpoint.take();
         self.interface.take();
         self.device.take();
         self.kernel_driver_detached = false;
+    }
+
+    /// Submit `data` as a pipelined sequence of bulk OUT transfers, keeping
+    /// up to `PIPELINE_WINDOW` in flight so the host controller always has a
+    /// pending request instead of idling between a submit and its await.
+    /// Bulk transfers on one endpoint complete in submission order, so chunks
+    /// arrive at the device in order despite the overlap.
+    async fn write_pipelined(&mut self, data: &[u8]) -> Result<()> {
+        let timeout = self.timeout;
+        let cancel = self.cancel.clone();
+        let ep = self
+            .endpoint
+            .as_mut()
+            .expect("checked by caller before write_pipelined");
+
+        let mut chunks = data.chunks(PIPELINE_CHUNK);
+        let mut in_flight = 0usize;
+
+        for chunk in chunks.by_ref().take(PIPELINE_WINDOW) {
+            ep.submit(chunk.into());
+            in_flight += 1;
+        }
+
+        let mut result: Result<()> = Ok(());
+        while in_flight > 0 {
+            let wait = tokio::time::timeout(timeout, ep.next_complete());
+            let completion = tokio::select! {
+                res = wait => match res {
+                    Ok(completion) => completion,
+                    Err(_elapsed) => {
+                        result = Err(PrinterError::Timeout);
+                        break;
+                    }
+                },
+                _ = cancel.cancelled() => {
+                    result = Err(PrinterError::JobCancelled);
+                    break;
+                }
+            };
+            in_flight -= 1;
+
+            if let Err(e) = completion.status {
+                result = Err(map_transfer_err(e));
+                break;
+            }
+
+            if let Some(chunk) = chunks.next() {
+                ep.submit(chunk.into());
+                in_flight += 1;
+            }
+        }
+
+        if result.is_err() {
+            // Cancel and drain whatever is still in flight so the endpoint
+            // isn't left with dangling completions before teardown.
+            ep.cancel_all();
+            while ep.pending() > 0 {
+                let _ = ep.next_complete().await;
+            }
+        }
+
+        result
     }
 }
 
@@ -143,6 +219,10 @@ impl Transport for UsbTransport {
             self.interface = Some(iface);
         }
 
+        let address = self.out_endpoint()?;
+        let iface = self.interface.as_ref().expect("just assigned above");
+        self.endpoint = Some(iface.endpoint::<Bulk, Out>(address).map_err(map_nusb_err)?);
+
         info!(
             vendor_id = format!("{:04x}", self.vendor_id),
             product_id = format!("{:04x}", self.product_id),
@@ -152,36 +232,17 @@ impl Transport for UsbTransport {
     }
 
     async fn write(&mut self, data: &[u8]) -> Result<()> {
-        let address = self.out_endpoint()?;
-        let iface = self.interface.as_ref().ok_or_else(|| {
-            PrinterError::TransportUnavailable("USB: writing without active connection".into())
-        })?;
-
-        let mut ep = iface.endpoint::<Bulk, Out>(address).map_err(map_nusb_err)?;
-
-        ep.submit(data.to_vec().into());
-
-        let write_fut = tokio::time::timeout(self.timeout, ep.next_complete());
-
-        tokio::select! {
-            res = write_fut => match res {
-                Ok(completion) => match completion.into_result() {
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        self.teardown_inflight().await;
-                        Err(map_transfer_err(e))
-                    }
-                },
-                Err(_elapsed) => {
-                    self.teardown_inflight().await;
-                    Err(PrinterError::Timeout)
-                }
-            },
-            _ = self.cancel.cancelled() => {
-                self.teardown_inflight().await;
-                Err(PrinterError::JobCancelled)
-            }
+        if self.endpoint.is_none() {
+            return Err(PrinterError::TransportUnavailable(
+                "USB: writing without active connection".into(),
+            ));
         }
+
+        let result = self.write_pipelined(data).await;
+        if result.is_err() {
+            self.teardown_inflight().await;
+        }
+        result
     }
 
     async fn read(&mut self, _buf: &mut [u8]) -> Result<usize> {
@@ -222,7 +283,10 @@ impl Transport for UsbTransport {
     }
 
     fn preferred_chunk_size(&self) -> usize {
-        4096
+        // No outer chunking: write_pipelined() slices into PIPELINE_CHUNK
+        // sub-transfers internally and keeps several in flight, so the full
+        // job buffer can be handed over in one Transport::write() call.
+        usize::MAX
     }
 }
 

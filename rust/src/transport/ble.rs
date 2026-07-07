@@ -20,7 +20,7 @@
 //   Data MUST be sent in chunks <= negotiated MTU.
 
 use async_trait::async_trait;
-use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter, WriteType};
+use btleplug::api::{Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType};
 use btleplug::platform::Manager;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -33,9 +33,12 @@ use crate::errors::{PrinterError, Result};
 const DEFAULT_PRINT_SERVICE_UUID: &str = "000018f0-0000-1000-8000-00805f9b34fb";
 const DEFAULT_PRINT_CHAR_UUID: &str = "00002af1-0000-1000-8000-00805f9b34fb";
 
-/// Default chunk size — conservative for maximum compatibility.
-/// Negotiate MTU with the printer to increase it.
+/// Default chunk size — conservative (ATT default MTU 23 minus 3 header = 20)
+/// for maximum compatibility across BLE printers. Overridden automatically at
+/// connect time once the real negotiated MTU is known (see `connect()`), unless
+/// `with_chunk_size` was called explicitly.
 const DEFAULT_CHUNK_SIZE: usize = 20;
+const DEFAULT_CHUNK_DELAY_MS: u64 = 20;
 const MAX_SCAN_MS: u64 = 5_000;
 
 pub struct BleTransport {
@@ -44,7 +47,14 @@ pub struct BleTransport {
     char_uuid: Uuid,
     scan_timeout: Duration,
     chunk_size: usize,
+    /// Set when `with_chunk_size` was called explicitly — disables the
+    /// post-connect MTU auto-adjustment so a deliberate override sticks.
+    manual_chunk_size: bool,
+    chunk_delay: Duration,
     peripheral: Option<btleplug::platform::Peripheral>,
+    /// Resolved write characteristic, cached once at connect time so each
+    /// `write()` does not re-enumerate all characteristics.
+    characteristic: Option<Characteristic>,
 }
 
 impl BleTransport {
@@ -55,8 +65,28 @@ impl BleTransport {
             char_uuid: Uuid::parse_str(DEFAULT_PRINT_CHAR_UUID).unwrap(),
             scan_timeout: Duration::from_millis(timeout_ms),
             chunk_size: DEFAULT_CHUNK_SIZE,
+            manual_chunk_size: false,
+            chunk_delay: Duration::from_millis(DEFAULT_CHUNK_DELAY_MS),
             peripheral: None,
+            characteristic: None,
         }
+    }
+
+    /// Override the write chunk size (bytes), bypassing MTU auto-detection.
+    /// Use when you know the printer's real negotiated MTU or need a value
+    /// that differs from `mtu - 3`. Defaults to auto-detected (falls back to
+    /// 20 if the platform can't report a negotiated MTU).
+    pub fn with_chunk_size(mut self, size: usize) -> Self {
+        self.chunk_size = size.max(1);
+        self.manual_chunk_size = true;
+        self
+    }
+
+    /// Override the inter-chunk delay. Set to zero when the transport's own
+    /// write backpressure is sufficient. Defaults to 20ms.
+    pub fn with_chunk_delay(mut self, delay: Duration) -> Self {
+        self.chunk_delay = delay;
+        self
     }
 
     async fn find_peripheral(
@@ -109,9 +139,23 @@ impl Transport for BleTransport {
                 .start_scan(ScanFilter::default())
                 .await
                 .map_err(|e| PrinterError::ConnectionFailed(format!("Scan error: {e}")))?;
-            tokio::time::sleep(Duration::from_millis(scan_ms)).await;
+
+            // Poll for the device instead of sleeping the full window: returns
+            // as soon as the peripheral shows up, bounded by scan_ms.
+            let scan_budget = Duration::from_millis(scan_ms);
+            let poll_interval = Duration::from_millis(250);
+            let started = std::time::Instant::now();
+            loop {
+                if let Some(p) = Self::find_peripheral(&central, &target).await? {
+                    peripheral = Some(p);
+                    break;
+                }
+                if started.elapsed() >= scan_budget {
+                    break;
+                }
+                tokio::time::sleep(poll_interval).await;
+            }
             central.stop_scan().await.ok();
-            peripheral = Self::find_peripheral(&central, &target).await?;
         }
 
         let peripheral = peripheral.ok_or_else(|| {
@@ -131,8 +175,36 @@ impl Transport for BleTransport {
             .await
             .map_err(|e| PrinterError::ConnectionFailed(format!("Service discovery error: {e}")))?;
 
-        info!(address = %self.target_address, "BLE connected");
+        // Resolve and cache the write characteristic once — avoids re-enumerating
+        // all characteristics on every 20-byte write.
+        let characteristic = peripheral
+            .characteristics()
+            .into_iter()
+            .find(|c| c.uuid == self.char_uuid)
+            .ok_or_else(|| {
+                PrinterError::ConnectionFailed(format!(
+                    "BLE: characteristic {} not found",
+                    self.char_uuid
+                ))
+            })?;
+
+        self.characteristic = Some(characteristic);
+
+        if !self.manual_chunk_size {
+            // mtu() reflects the ATT MTU negotiated during/after connection;
+            // it reads back api::DEFAULT_MTU_SIZE (23) when the platform
+            // hasn't negotiated (or can't report) anything larger, which
+            // resolves to the same conservative 20-byte chunk as before.
+            let mtu = peripheral.mtu();
+            let auto_chunk = (mtu as usize).saturating_sub(3).max(1);
+            if auto_chunk != self.chunk_size {
+                info!(mtu, auto_chunk, "BLE MTU negotiated — adjusting write chunk size");
+            }
+            self.chunk_size = auto_chunk;
+        }
+
         self.peripheral = Some(peripheral);
+        info!(address = %self.target_address, "BLE connected");
         Ok(())
     }
 
@@ -140,17 +212,11 @@ impl Transport for BleTransport {
         let peripheral = self.peripheral.as_ref().ok_or_else(|| {
             PrinterError::TransportUnavailable("BLE: writing without active connection".into())
         })?;
-
-        let characteristics = peripheral.characteristics();
-        let char = characteristics
-            .iter()
-            .find(|c| c.uuid == self.char_uuid)
-            .ok_or_else(|| {
-                PrinterError::TransportUnavailable(format!(
-                    "BLE: characteristic {} not found",
-                    self.char_uuid
-                ))
-            })?;
+        let char = self.characteristic.as_ref().ok_or_else(|| {
+            PrinterError::TransportUnavailable(
+                "BLE: write characteristic not resolved (not connected?)".into(),
+            )
+        })?;
 
         peripheral
             .write(char, data, WriteType::WithoutResponse)
@@ -166,6 +232,7 @@ impl Transport for BleTransport {
     }
 
     async fn disconnect(&mut self) -> Result<()> {
+        self.characteristic = None;
         if let Some(p) = self.peripheral.take() {
             p.disconnect().await.ok();
             info!(address = %self.target_address, "BLE disconnected");
@@ -194,6 +261,33 @@ impl Transport for BleTransport {
     }
 
     fn chunk_delay(&self) -> Duration {
-        Duration::from_millis(20)
+        self.chunk_delay
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_are_conservative() {
+        let ble = BleTransport::new("AA:BB:CC:DD:EE:FF", 1000);
+        assert_eq!(ble.preferred_chunk_size(), 20);
+        assert_eq!(ble.chunk_delay(), Duration::from_millis(20));
+    }
+
+    #[test]
+    fn chunk_size_and_delay_overridable() {
+        let ble = BleTransport::new("AA:BB:CC:DD:EE:FF", 1000)
+            .with_chunk_size(180)
+            .with_chunk_delay(Duration::from_millis(5));
+        assert_eq!(ble.preferred_chunk_size(), 180);
+        assert_eq!(ble.chunk_delay(), Duration::from_millis(5));
+    }
+
+    #[test]
+    fn chunk_size_clamped_to_minimum_1() {
+        let ble = BleTransport::new("x", 1).with_chunk_size(0);
+        assert_eq!(ble.preferred_chunk_size(), 1);
     }
 }

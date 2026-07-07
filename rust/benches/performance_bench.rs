@@ -1,5 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::sync::{Arc, Mutex};
+use thermal_printer_rs::api::simple::encode_raster_image;
 use thermal_printer_rs::config::PrinterConfig;
 use thermal_printer_rs::escpos_adapter::{EscposAdapter, ReceiptLine};
 use thermal_printer_rs::printer::PrintService;
@@ -95,10 +96,30 @@ fn bench_full_pipeline(c: &mut Criterion) {
     });
 }
 
+fn bench_raster_encode(c: &mut Criterion) {
+    let rt = create_runtime();
+    let _guard = rt.enter();
+    // 576px (standard 58mm paper) × 800 rows ≈ a typical receipt image.
+    let (w, h): (usize, usize) = (576, 800);
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for i in 0..(w * h) {
+        let v = ((i * 7) % 256) as u8;
+        rgba.extend_from_slice(&[v, 255 - v, v / 2, 255]);
+    }
+
+    c.bench_function("raster_encode_576x800", |b| {
+        b.to_async(&rt).iter(|| {
+            let data = black_box(rgba.clone());
+            async move { encode_raster_image(data, w as i64, h as i64).await }
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_adapter_generation,
     bench_transport_throughput,
-    bench_full_pipeline
+    bench_full_pipeline,
+    bench_raster_encode
 );
 criterion_main!(benches);

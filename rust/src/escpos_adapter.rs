@@ -71,11 +71,17 @@ pub struct ReceiptLine {
 // ──────────────────────────────────────────────────────────────────
 pub struct EscposAdapter {
     paper_width: u8,
+    /// Precomputed separator line (constant for a given paper width) so receipts
+    /// don't re-allocate it on every build.
+    separator: String,
 }
 
 impl EscposAdapter {
     pub fn new(paper_width: u8) -> Self {
-        Self { paper_width }
+        Self {
+            paper_width,
+            separator: "-".repeat(paper_width as usize),
+        }
     }
 
     /// Generates an ESC/POS buffer for simple text with paper cut.
@@ -102,22 +108,25 @@ impl EscposAdapter {
         let sep = self.separator();
 
         let buf = self.with_printer(|p| {
+            // Reused line buffer — one allocation per receipt, not per line.
+            let mut row = String::with_capacity(self.paper_width as usize);
+
             p.init()?
                 .justify(JustifyMode::CENTER)?
                 .bold(true)?
                 .size(1, 1)?
                 .writeln(title)?
                 .bold(false)?
-                .writeln(&sep)?
+                .writeln(sep)?
                 .justify(JustifyMode::LEFT)?;
 
             for (label, value) in lines {
-                let row = self.format_line(label, value);
+                self.format_line_into(&mut row, label, value);
                 p.writeln(&row)?;
             }
 
             // ── Separator and total ────────────────────────────────────
-            p.writeln(&sep)?
+            p.writeln(sep)?
                 .justify(JustifyMode::RIGHT)?
                 .bold(true)?
                 .writeln(&format!("TOTAL: {}", total))?
@@ -216,14 +225,21 @@ impl EscposAdapter {
         Ok(driver_clone.take_buffer())
     }
 
-    fn separator(&self) -> String {
-        "-".repeat(self.paper_width as usize)
+    fn separator(&self) -> &str {
+        &self.separator
     }
 
-    fn format_line(&self, label: &str, value: &str) -> String {
+    /// Formats `label ... value` into `buf` (reused across lines), padded to the
+    /// paper width. Avoids a fresh `String` allocation per receipt line.
+    fn format_line_into(&self, buf: &mut String, label: &str, value: &str) {
+        buf.clear();
         let width = self.paper_width as usize;
         let available = width.saturating_sub(label.len() + value.len());
-        format!("{}{:>pad$}{}", label, value, "", pad = available)
+        buf.push_str(label);
+        for _ in 0..available {
+            buf.push(' ');
+        }
+        buf.push_str(value);
     }
 }
 
