@@ -20,7 +20,7 @@
 //   Data MUST be sent in chunks <= negotiated MTU.
 
 use async_trait::async_trait;
-use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter, WriteType};
+use btleplug::api::{Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType};
 use btleplug::platform::Manager;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -33,8 +33,14 @@ use crate::errors::{PrinterError, Result};
 const DEFAULT_PRINT_SERVICE_UUID: &str = "000018f0-0000-1000-8000-00805f9b34fb";
 const DEFAULT_PRINT_CHAR_UUID: &str = "00002af1-0000-1000-8000-00805f9b34fb";
 
-/// Default chunk size — conservative for maximum compatibility.
-/// Negotiate MTU with the printer to increase it.
+/// Default chunk size — conservative (ATT default MTU 23 minus 3 header = 20)
+/// for maximum compatibility across BLE printers.
+///
+/// NOTE: btleplug 0.11 does NOT expose `request_mtu` or an MTU-changed event,
+/// so the negotiated MTU cannot be queried here. Increasing this constant only
+/// pays off on printers known to accept larger writes; do so per-deployment and
+/// validate on real hardware (a too-large chunk silently drops data on the
+/// `WithoutResponse` path).
 const DEFAULT_CHUNK_SIZE: usize = 20;
 const MAX_SCAN_MS: u64 = 5_000;
 
@@ -45,6 +51,9 @@ pub struct BleTransport {
     scan_timeout: Duration,
     chunk_size: usize,
     peripheral: Option<btleplug::platform::Peripheral>,
+    /// Resolved write characteristic, cached once at connect time so each
+    /// `write()` does not re-enumerate all characteristics.
+    characteristic: Option<Characteristic>,
 }
 
 impl BleTransport {
@@ -56,6 +65,7 @@ impl BleTransport {
             scan_timeout: Duration::from_millis(timeout_ms),
             chunk_size: DEFAULT_CHUNK_SIZE,
             peripheral: None,
+            characteristic: None,
         }
     }
 
@@ -109,9 +119,23 @@ impl Transport for BleTransport {
                 .start_scan(ScanFilter::default())
                 .await
                 .map_err(|e| PrinterError::ConnectionFailed(format!("Scan error: {e}")))?;
-            tokio::time::sleep(Duration::from_millis(scan_ms)).await;
+
+            // Poll for the device instead of sleeping the full window: returns
+            // as soon as the peripheral shows up, bounded by scan_ms.
+            let scan_budget = Duration::from_millis(scan_ms);
+            let poll_interval = Duration::from_millis(250);
+            let started = std::time::Instant::now();
+            loop {
+                if let Some(p) = Self::find_peripheral(&central, &target).await? {
+                    peripheral = Some(p);
+                    break;
+                }
+                if started.elapsed() >= scan_budget {
+                    break;
+                }
+                tokio::time::sleep(poll_interval).await;
+            }
             central.stop_scan().await.ok();
-            peripheral = Self::find_peripheral(&central, &target).await?;
         }
 
         let peripheral = peripheral.ok_or_else(|| {
@@ -131,8 +155,22 @@ impl Transport for BleTransport {
             .await
             .map_err(|e| PrinterError::ConnectionFailed(format!("Service discovery error: {e}")))?;
 
-        info!(address = %self.target_address, "BLE connected");
+        // Resolve and cache the write characteristic once — avoids re-enumerating
+        // all characteristics on every 20-byte write.
+        let characteristic = peripheral
+            .characteristics()
+            .into_iter()
+            .find(|c| c.uuid == self.char_uuid)
+            .ok_or_else(|| {
+                PrinterError::ConnectionFailed(format!(
+                    "BLE: characteristic {} not found",
+                    self.char_uuid
+                ))
+            })?;
+
+        self.characteristic = Some(characteristic);
         self.peripheral = Some(peripheral);
+        info!(address = %self.target_address, "BLE connected");
         Ok(())
     }
 
@@ -140,17 +178,11 @@ impl Transport for BleTransport {
         let peripheral = self.peripheral.as_ref().ok_or_else(|| {
             PrinterError::TransportUnavailable("BLE: writing without active connection".into())
         })?;
-
-        let characteristics = peripheral.characteristics();
-        let char = characteristics
-            .iter()
-            .find(|c| c.uuid == self.char_uuid)
-            .ok_or_else(|| {
-                PrinterError::TransportUnavailable(format!(
-                    "BLE: characteristic {} not found",
-                    self.char_uuid
-                ))
-            })?;
+        let char = self.characteristic.as_ref().ok_or_else(|| {
+            PrinterError::TransportUnavailable(
+                "BLE: write characteristic not resolved (not connected?)".into(),
+            )
+        })?;
 
         peripheral
             .write(char, data, WriteType::WithoutResponse)
@@ -166,6 +198,7 @@ impl Transport for BleTransport {
     }
 
     async fn disconnect(&mut self) -> Result<()> {
+        self.characteristic = None;
         if let Some(p) = self.peripheral.take() {
             p.disconnect().await.ok();
             info!(address = %self.target_address, "BLE disconnected");

@@ -86,10 +86,8 @@ impl Transport for TcpTransport {
             .map_err(|_| PrinterError::Timeout)?
             .map_err(PrinterError::Io)?;
 
-        timeout(self.timeout, stream.flush())
-            .await
-            .map_err(|_| PrinterError::Timeout)?
-            .map_err(PrinterError::Io)?;
+        // TcpStream::flush is a no-op in tokio (TCP has no userspace buffer to
+        // drain); the kernel socket buffer is flushed by the OS. Omit it.
 
         debug!(bytes = data.len(), "Buffer sent successfully");
         Ok(())
@@ -137,7 +135,10 @@ impl Transport for TcpTransport {
     }
 
     fn preferred_chunk_size(&self) -> usize {
-        16384 // 16KB for TCP stream
+        // TCP hands the whole buffer to a single write_all — the kernel socket
+        // does its own batching, so application-level chunking only adds extra
+        // awaits and syscalls for no benefit.
+        usize::MAX
     }
 }
 

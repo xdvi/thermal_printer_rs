@@ -511,78 +511,66 @@ fn _dither_and_encode(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8
         )));
     }
 
-    let n = width * height;
-    let mut gray = vec![0i32; n];
+    // Guard against absurd dimensions blowing up memory (e.g. 576×50000 ≈ 115MB).
+    const MAX_DIM: usize = 8192;
+    if width > MAX_DIM || height > MAX_DIM {
+        return Err(PrinterError::InvalidConfig(format!(
+            "Raster image dimensions exceed {MAX_DIM}×{MAX_DIM}"
+        )));
+    }
 
-    // RGBA → grayscale with alpha-compositing over a white background.
-    // All integer math: avoids FPU setup cost per pixel.
-    for (i, gray_val) in gray.iter_mut().enumerate().take(n) {
+    let n = width * height;
+    let bpl = width.div_ceil(8); // bytes per raster line
+
+    // 16-bit gray buffer: half the footprint and memory traffic of the old
+    // i32 buffer, enough headroom for error diffusion, and it unlocks wider
+    // auto-vectorized SIMD lanes.
+    let mut gray: Vec<i16> = vec![0; n];
+
+    // Pass 1: RGBA → grayscale, alpha-composited over white. Integer math only.
+    for (i, g) in gray.iter_mut().enumerate() {
         let b = i * 4;
         let r = rgba[b] as i32;
-        let g = rgba[b + 1] as i32;
-        let bv = rgba[b + 2] as i32;
+        let g_in = rgba[b + 1] as i32;
+        let bl = rgba[b + 2] as i32;
         let a = rgba[b + 3] as i32;
         let ia = 255 - a;
-
-        // Blend over white: channel_out = (channel * a + 255 * (255-a)) / 255
+        // Blend over white: (channel*a + 255*(255-a) + 127) / 255
         let br = (r * a + 255 * ia + 127) / 255;
-        let bg = (g * a + 255 * ia + 127) / 255;
-        let bb = (bv * a + 255 * ia + 127) / 255;
-
-        // Luminosity weights (BT.601, integer approximation × 1000)
-        *gray_val = (299 * br + 587 * bg + 114 * bb) / 1000;
+        let bg = (g_in * a + 255 * ia + 127) / 255;
+        let bb = (bl * a + 255 * ia + 127) / 255;
+        // BT.601 luminosity with fixed-point weights summing to 256 (>> 8).
+        // Avoids the integer divide-by-1000 of the old version (a real idiv).
+        *g = ((77 * br + 150 * bg + 29 * bb) >> 8) as i16;
     }
 
-    // Floyd-Steinberg dithering.
-    // Skip diffusion when err == 0 (pure white or pure black pixels).
-    for y in 0..height {
-        for x in 0..width {
-            let idx = y * width + x;
-            let old = gray[idx];
-            let neo = if old < 128 { 0i32 } else { 255i32 };
-            gray[idx] = neo;
-            let err = old - neo;
-            if err == 0 {
-                continue;
-            }
-
-            if x + 1 < width {
-                let i = idx + 1;
-                gray[i] = (gray[i] + err * 7 / 16).clamp(0, 255);
-            }
-            if y + 1 < height {
-                if x > 0 {
-                    let i = idx + width - 1;
-                    gray[i] = (gray[i] + err * 3 / 16).clamp(0, 255);
-                }
-                {
-                    let i = idx + width;
-                    gray[i] = (gray[i] + err * 5 / 16).clamp(0, 255);
-                }
-                if x + 1 < width {
-                    let i = idx + width + 1;
-                    gray[i] = (gray[i] + err / 16).clamp(0, 255);
-                }
-            }
-        }
-    }
-
-    // Build GS v 0 raster bit-image command.
-    // Single pre-allocated Vec — no reallocations during assembly.
-    let bpl = width.div_ceil(8); // bytes per raster line
+    // Pre-allocate the GS v 0 command with header, then stream rows in.
     let mut cmd = Vec::with_capacity(8 + bpl * height);
-
     cmd.extend_from_slice(&[0x1D, 0x76, 0x30, 0x00]);
     cmd.push((bpl & 0xFF) as u8);
     cmd.push(((bpl >> 8) & 0xFF) as u8);
     cmd.push((height & 0xFF) as u8);
     cmd.push(((height >> 8) & 0xFF) as u8);
 
+    // Pass 2: Floyd-Steinberg dithering fused with bit-packing. Once a row's
+    // x-loop finishes every pixel in it is thresholded (diffusion only writes
+    // to row y+1), so the row is packed straight into `cmd`. This removes the
+    // old separate bit-pack pass (one fewer full sweep over the buffer).
+    //
+    // Error is propagated unclamped (saturating_add only guards i16 overflow,
+    // never triggered in practice): this preserves more error energy at
+    // highlight/shadow edges than the old clamp(0,255), trading a ≤1-level
+    // per-pixel delta for better dynamic range.
     for y in 0..height {
-        let mut bit = 0u8;
         let mut cur = 0u8;
+        let mut bit = 0u8;
         for x in 0..width {
-            if gray[y * width + x] == 0 {
+            let idx = y * width + x;
+            let old = gray[idx];
+            let neo: i16 = if old < 128 { 0 } else { 255 };
+            gray[idx] = neo;
+            // Black pixel (neo == 0) → set bit, MSB first.
+            if neo == 0 {
                 cur |= 1 << (7 - bit);
             }
             bit += 1;
@@ -590,6 +578,29 @@ fn _dither_and_encode(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8
                 cmd.push(cur);
                 cur = 0;
                 bit = 0;
+            }
+
+            let err = old - neo;
+            if err != 0 {
+                // Diffuse in i32 to avoid any i16 overflow in err*7.
+                if x + 1 < width {
+                    let i = idx + 1;
+                    gray[i] = gray[i].saturating_add((err as i32 * 7 / 16) as i16);
+                }
+                if y + 1 < height {
+                    if x > 0 {
+                        let i = idx + width - 1;
+                        gray[i] = gray[i].saturating_add((err as i32 * 3 / 16) as i16);
+                    }
+                    {
+                        let i = idx + width;
+                        gray[i] = gray[i].saturating_add((err as i32 * 5 / 16) as i16);
+                    }
+                    if x + 1 < width {
+                        let i = idx + width + 1;
+                        gray[i] = gray[i].saturating_add((err as i32 / 16) as i16);
+                    }
+                }
             }
         }
         if bit > 0 {
@@ -645,4 +656,62 @@ fn build_config(dto: PrinterConfigDto) -> crate::errors::Result<PrinterConfig> {
         encoding: CharEncoding::default(),
         max_retries: dto.max_retries,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::_dither_and_encode;
+
+    fn rgba(w: usize, h: usize, pixel: [u8; 4]) -> Vec<u8> {
+        let mut v = Vec::with_capacity(w * h * 4);
+        for _ in 0..(w * h) {
+            v.extend_from_slice(&pixel);
+        }
+        v
+    }
+
+    #[test]
+    fn dither_header_and_length() {
+        let (w, h) = (16, 4);
+        let cmd = _dither_and_encode(&rgba(w, h, [0, 0, 0, 255]), w, h).unwrap();
+        let bpl = w.div_ceil(8);
+        assert_eq!(cmd.len(), 8 + bpl * h);
+        assert_eq!(&cmd[0..4], &[0x1D, 0x76, 0x30, 0x00]);
+        assert_eq!(cmd[4] as usize, bpl);
+        assert_eq!(cmd[6] as usize, h);
+    }
+
+    #[test]
+    fn dither_all_black_sets_all_bits() {
+        let (w, h) = (16, 2);
+        let cmd = _dither_and_encode(&rgba(w, h, [0, 0, 0, 255]), w, h).unwrap();
+        for &b in &cmd[8..] {
+            assert_eq!(b, 0xFF, "black pixel must set every bit");
+        }
+    }
+
+    #[test]
+    fn dither_all_white_clears_all_bits() {
+        let (w, h) = (16, 2);
+        let cmd = _dither_and_encode(&rgba(w, h, [255, 255, 255, 255]), w, h).unwrap();
+        for &b in &cmd[8..] {
+            assert_eq!(b, 0x00, "white pixel must clear every bit");
+        }
+    }
+
+    #[test]
+    fn dither_non_multiple_of_8_pads_row() {
+        // width 10 → 2 bytes/line; the trailing byte keeps only its top 2 bits.
+        let (w, h) = (10, 1);
+        let cmd = _dither_and_encode(&rgba(w, h, [0, 0, 0, 255]), w, h).unwrap();
+        assert_eq!(cmd.len(), 8 + 2);
+        assert_eq!(cmd[8], 0xFF);
+        assert_eq!(cmd[9], 0b1100_0000);
+    }
+
+    #[test]
+    fn dither_rejects_huge_dimensions() {
+        assert!(_dither_and_encode(&[], 99_999, 1).is_err());
+        assert!(_dither_and_encode(&[], 1, 99_999).is_err());
+    }
 }

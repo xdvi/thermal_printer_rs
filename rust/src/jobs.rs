@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, oneshot};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::errors::{PrinterError, Result};
 use crate::printer::PrintService;
@@ -106,11 +106,11 @@ impl PrintWorker {
 
             match cmd {
                 PrintCommand::Print(buf) => {
-                    info!(bytes = buf.len(), "Processing background print job");
+                    debug!(bytes = buf.len(), "Processing background print job");
                     let _ = self.handle_print(buf).await;
                 }
                 PrintCommand::PrintAwait { buf, resp } => {
-                    info!(bytes = buf.len(), "Processing awaited print job");
+                    debug!(bytes = buf.len(), "Processing awaited print job");
                     let result = self.handle_print(buf).await;
                     let _ = resp.send(result);
                 }

@@ -39,7 +39,8 @@ uuid     = { version = "1", features = ["v4"], optional = true }
 thiserror = "1"
 
 # Logging estructurado
-tracing            = "0.1"
+# release_max_level_info: drops debug!/trace! calls at compile time in release.
+tracing            = { version = "0.1", features = ["release_max_level_info"] }
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
 # Utilidades thread-safe
@@ -56,3 +57,20 @@ harness = false
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+# ──────────────────────────────────────────────
+# Release / bench tuning
+# thin LTO + single codegen unit let the optimizer inline across crates
+# (escpos, tokio, transport impls) and into the hot print path.
+# strip = "debuginfo" shrinks the cdylib without removing exported symbols.
+# NOTE: panic is left at default ("unwind") because flutter_rust_bridge may
+# unwind panics across the FFI boundary.
+# ──────────────────────────────────────────────
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+[profile.bench]
+inherits = "release"
