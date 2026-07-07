@@ -34,13 +34,9 @@ const DEFAULT_PRINT_SERVICE_UUID: &str = "000018f0-0000-1000-8000-00805f9b34fb";
 const DEFAULT_PRINT_CHAR_UUID: &str = "00002af1-0000-1000-8000-00805f9b34fb";
 
 /// Default chunk size — conservative (ATT default MTU 23 minus 3 header = 20)
-/// for maximum compatibility across BLE printers.
-///
-/// NOTE: btleplug 0.11 does NOT expose `request_mtu` or an MTU-changed event,
-/// so the negotiated MTU cannot be queried here. Increasing this constant only
-/// pays off on printers known to accept larger writes; do so per-deployment and
-/// validate on real hardware (a too-large chunk silently drops data on the
-/// `WithoutResponse` path).
+/// for maximum compatibility across BLE printers. Overridden automatically at
+/// connect time once the real negotiated MTU is known (see `connect()`), unless
+/// `with_chunk_size` was called explicitly.
 const DEFAULT_CHUNK_SIZE: usize = 20;
 const DEFAULT_CHUNK_DELAY_MS: u64 = 20;
 const MAX_SCAN_MS: u64 = 5_000;
@@ -51,6 +47,9 @@ pub struct BleTransport {
     char_uuid: Uuid,
     scan_timeout: Duration,
     chunk_size: usize,
+    /// Set when `with_chunk_size` was called explicitly — disables the
+    /// post-connect MTU auto-adjustment so a deliberate override sticks.
+    manual_chunk_size: bool,
     chunk_delay: Duration,
     peripheral: Option<btleplug::platform::Peripheral>,
     /// Resolved write characteristic, cached once at connect time so each
@@ -66,16 +65,20 @@ impl BleTransport {
             char_uuid: Uuid::parse_str(DEFAULT_PRINT_CHAR_UUID).unwrap(),
             scan_timeout: Duration::from_millis(timeout_ms),
             chunk_size: DEFAULT_CHUNK_SIZE,
+            manual_chunk_size: false,
             chunk_delay: Duration::from_millis(DEFAULT_CHUNK_DELAY_MS),
             peripheral: None,
             characteristic: None,
         }
     }
 
-    /// Override the write chunk size (bytes). Set to (negotiated MTU - 3) on
-    /// printers known to accept larger writes. Defaults to 20.
+    /// Override the write chunk size (bytes), bypassing MTU auto-detection.
+    /// Use when you know the printer's real negotiated MTU or need a value
+    /// that differs from `mtu - 3`. Defaults to auto-detected (falls back to
+    /// 20 if the platform can't report a negotiated MTU).
     pub fn with_chunk_size(mut self, size: usize) -> Self {
         self.chunk_size = size.max(1);
+        self.manual_chunk_size = true;
         self
     }
 
@@ -186,6 +189,20 @@ impl Transport for BleTransport {
             })?;
 
         self.characteristic = Some(characteristic);
+
+        if !self.manual_chunk_size {
+            // mtu() reflects the ATT MTU negotiated during/after connection;
+            // it reads back api::DEFAULT_MTU_SIZE (23) when the platform
+            // hasn't negotiated (or can't report) anything larger, which
+            // resolves to the same conservative 20-byte chunk as before.
+            let mtu = peripheral.mtu();
+            let auto_chunk = (mtu as usize).saturating_sub(3).max(1);
+            if auto_chunk != self.chunk_size {
+                info!(mtu, auto_chunk, "BLE MTU negotiated — adjusting write chunk size");
+            }
+            self.chunk_size = auto_chunk;
+        }
+
         self.peripheral = Some(peripheral);
         info!(address = %self.target_address, "BLE connected");
         Ok(())

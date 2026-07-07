@@ -655,9 +655,12 @@ fn build_config(dto: PrinterConfigDto) -> crate::errors::Result<PrinterConfig> {
         paper_width: dto.paper_width,
         encoding: CharEncoding::default(),
         max_retries: dto.max_retries,
-        // BLE chunk tuning is exposed on PrinterConfig (Rust API). The Dart/FFI
-        // DTO does not carry it yet — regenerate flutter_rust_bridge bindings to
-        // surface ble_chunk_size / ble_chunk_delay_ms from the app side.
+        // BLE chunk size is auto-detected from the negotiated MTU at connect
+        // time (see transport/ble.rs); these overrides are only for the rare
+        // printer that needs a value other than mtu-3. Exposed on
+        // PrinterConfig (Rust API) but not yet on the Dart/FFI DTO —
+        // regenerate flutter_rust_bridge bindings to surface
+        // ble_chunk_size / ble_chunk_delay_ms from the app side.
         ble_chunk_size: None,
         ble_chunk_delay_ms: None,
     })

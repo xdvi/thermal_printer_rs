@@ -24,9 +24,10 @@ pub struct PrinterConfig {
     pub encoding: CharEncoding,
     /// Number of automatic reconnection attempts
     pub max_retries: u8,
-    /// BLE only: override the write chunk size (bytes). `None` keeps the
-    /// conservative 20-byte default. Set to (negotiated MTU - 3) on printers
-    /// known to accept larger writes for a big throughput gain.
+    /// BLE only: override the write chunk size (bytes). `None` (default)
+    /// auto-detects from the negotiated MTU at connect time (falls back to
+    /// 20 if the platform can't report one). Only set this for a printer
+    /// that needs a value other than mtu - 3.
     pub ble_chunk_size: Option<usize>,
     /// BLE only: override the inter-chunk delay. `None` keeps the 20ms default.
     /// Set to 0 when the transport's own write backpressure suffices.
