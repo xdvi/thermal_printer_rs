@@ -288,11 +288,17 @@ impl PrintService {
         // is gone (IO task is gone), hence `None`.
         if self
             .cmd_tx
-            .send(IoCommand::Write { data: buf, resp: tx })
+            .send(IoCommand::Write {
+                data: buf,
+                resp: tx,
+            })
             .await
             .is_err()
         {
-            return Err((None, PrinterError::ConnectionFailed("IO task dropped".into())));
+            return Err((
+                None,
+                PrinterError::ConnectionFailed("IO task dropped".into()),
+            ));
         }
 
         match rx.await {

@@ -20,7 +20,9 @@
 //   Data MUST be sent in chunks <= negotiated MTU.
 
 use async_trait::async_trait;
-use btleplug::api::{Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType};
+use btleplug::api::{
+    Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType,
+};
 use btleplug::platform::Manager;
 use std::time::Duration;
 use tracing::{info, warn};
@@ -198,7 +200,10 @@ impl Transport for BleTransport {
             let mtu = peripheral.mtu();
             let auto_chunk = (mtu as usize).saturating_sub(3).max(1);
             if auto_chunk != self.chunk_size {
-                info!(mtu, auto_chunk, "BLE MTU negotiated — adjusting write chunk size");
+                info!(
+                    mtu,
+                    auto_chunk, "BLE MTU negotiated — adjusting write chunk size"
+                );
             }
             self.chunk_size = auto_chunk;
         }
